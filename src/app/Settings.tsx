@@ -6,7 +6,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { ArrowLeft, ChevronRight, X, AlertCircle, Loader2, Star } from "lucide-react";
+import { ArrowLeft, ChevronRight, X, AlertCircle, Loader2, Star, Globe } from "lucide-react";
 import { type Account, profileOf, hasPassword, deleteAccount } from "./auth-store";
 import {
   type Preferences, loadPreferences, savePreferences, clearPreferences,
@@ -78,6 +78,7 @@ const SECTIONS: SettingsSection[] = [
 
 export function SettingsScreen({
   account, onBack, onLogout, onDeleteProfile, onAccountChange, isDark = true, onToggleTheme,
+  onOpenHoloProfile,
 }: {
   account: Account;
   onBack: () => void;
@@ -87,6 +88,8 @@ export function SettingsScreen({
   onAccountChange: (account: Account) => void;
   isDark?: boolean;
   onToggleTheme?: () => void;
+  /** The Holo Profile is a full screen the app owns, not a settings sub-page. */
+  onOpenHoloProfile?: () => void;
 }) {
   const t = useTokens(isDark);
   const profile = profileOf(account);
@@ -155,6 +158,25 @@ export function SettingsScreen({
             </div>
             <ChevronRight className="w-4 h-4 flex-shrink-0" style={{ color: t.chevron }} />
           </button>
+
+          {/* Holo Profile — the 3D creator card, opened as its own screen. */}
+          {onOpenHoloProfile && (
+            <motion.button whileTap={{ scale: 0.98 }} onClick={onOpenHoloProfile}
+              className="w-full flex items-center gap-4 p-4 rounded-2xl mb-6 text-left"
+              style={{
+                background: isDark
+                  ? "linear-gradient(120deg, rgba(0,174,239,0.16), rgba(124,58,237,0.14))"
+                  : "linear-gradient(120deg, rgba(0,174,239,0.12), rgba(124,58,237,0.08))",
+                border: `1px solid ${ACCENT}44`,
+              }}>
+              <Globe className="w-6 h-6 flex-shrink-0" style={{ color: ACCENT }} />
+              <div className="min-w-0 flex-1">
+                <p className="font-bold text-[15px]" style={{ color: ACCENT }}>View Holo Profile</p>
+                <p className="text-[13px] truncate" style={{ color: t.sub }}>Your 3D interactive creator profile</p>
+              </div>
+              <ChevronRight className="w-4 h-4 flex-shrink-0" style={{ color: ACCENT }} />
+            </motion.button>
+          )}
 
           {/* Appearance */}
           <div className="mb-5">
