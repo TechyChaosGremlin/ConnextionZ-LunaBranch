@@ -8,9 +8,6 @@ interface YouTubePlayerProps {
 }
 
 // ─── YouTube IFrame API loader ───────────────────────────────────────────────
-// Ensures the YT API script is loaded exactly once, then runs the callback
-// (creating a player) as soon as the API is ready — even if it was already
-// loaded by a previous mount.
 let ytApiPromise: Promise<void> | null = null;
 
 function ensureYouTubeApiReady(callback: () => void): void {
@@ -37,6 +34,7 @@ export function YouTubePlayer({ videoUrl, username, isActive, paused }: YouTubeP
   const isActiveRef = useRef(isActive);
   const pausedRef = useRef(paused);
   const videoId = videoUrl.split("/").pop();
+  const unmuteTimeoutRef = useRef<number | null>(null);
 
   // Keep latest props available inside callbacks
   useEffect(() => {
@@ -56,6 +54,7 @@ export function YouTubePlayer({ videoUrl, username, isActive, paused }: YouTubeP
         videoId,
         playerVars: {
           autoplay: isActiveRef.current && !pausedRef.current ? 1 : 0,
+          mute: 1, // start muted to satisfy autoplay policy
           loop: 1,
           playlist: videoId,
           playsinline: 1,
@@ -64,7 +63,23 @@ export function YouTubePlayer({ videoUrl, username, isActive, paused }: YouTubeP
         },
         events: {
           onReady: () => {
-            if (isActiveRef.current && !pausedRef.current) {
+            console.log("Player ready, isActive:", isActiveRef.current, "paused:", pausedRef.current);
+            // Attempt to play after a short delay to ensure the player is fully ready
+            setTimeout(() => {
+              if (isActiveRef.current && !pausedRef.current) {
+                playerRef.current?.playVideo();
+                // Schedule unmute after 1 second of playback
+                unmuteTimeoutRef.current = window.setTimeout(() => {
+                  if (isActiveRef.current && !pausedRef.current) {
+                    playerRef.current?.unMute();
+                  }
+                }, 1000);
+              }
+            }, 100);
+          },
+          onStateChange: (event: any) => {
+            // If the player is not playing and we expect it to, retry
+            if (event.data === -1 && isActiveRef.current && !pausedRef.current) {
               playerRef.current?.playVideo();
             }
           },
@@ -75,6 +90,10 @@ export function YouTubePlayer({ videoUrl, username, isActive, paused }: YouTubeP
     ensureYouTubeApiReady(createPlayer);
 
     return () => {
+      if (unmuteTimeoutRef.current) {
+        clearTimeout(unmuteTimeoutRef.current);
+        unmuteTimeoutRef.current = null;
+      }
       playerRef.current?.destroy();
       playerRef.current = null;
     };
@@ -86,10 +105,40 @@ export function YouTubePlayer({ videoUrl, username, isActive, paused }: YouTubeP
     if (!player || typeof player.playVideo !== "function") return;
     if (isActive && !paused) {
       player.playVideo();
+      // If we're starting playback, schedule unmute after 1 second
+      if (unmuteTimeoutRef.current) clearTimeout(unmuteTimeoutRef.current);
+      unmuteTimeoutRef.current = window.setTimeout(() => {
+        if (isActiveRef.current && !pausedRef.current) {
+          player.unMute();
+        }
+      }, 1000);
     } else {
       player.pauseVideo();
+      // Clear any pending unmute
+      if (unmuteTimeoutRef.current) {
+        clearTimeout(unmuteTimeoutRef.current);
+        unmuteTimeoutRef.current = null;
+      }
     }
   }, [isActive, paused]);
 
-  return <div ref={containerRef} className="absolute inset-0 w-full h-full" />;
+  return (
+    <div
+      className="relative w-full h-full"
+      onClick={(e) => {
+        e.stopPropagation(); // prevent parent from toggling paused
+        playerRef.current?.playVideo(); // force play
+        // If user clicks, unmute immediately
+        playerRef.current?.unMute();
+        // Clear any pending unmute timeout
+        if (unmuteTimeoutRef.current) {
+          clearTimeout(unmuteTimeoutRef.current);
+          unmuteTimeoutRef.current = null;
+        }
+      }}
+    >
+      {/* Video container */}
+      <div ref={containerRef} className="absolute inset-0 w-full h-full" />
+    </div>
+  );
 }
