@@ -5,6 +5,7 @@ import { SettingsScreen, DeleteProfileModal } from "./Settings";
 import { type Account, getSession, endSession } from "./auth-store";
 import { GoLiveSetup, CreatorLiveView, ViewerLiveView, LiveBannerStrip } from "./LiveStream";
 import { InboxScreen } from "./Inbox";
+import { YouTubePlayer } from "./components/YouTubePlayer";
 import { ThemeContext, useTheme } from "./ThemeContext";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -27,6 +28,7 @@ const VIDEOS = [
     collabScore: 4.9, collabCount: 312,
     likes: 284700, comments: 4820, shares: 12400, saves: 9300,
     thumbnail: "https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/SxUBblhKZFg",
   },
   {
     id: "2",
@@ -39,6 +41,7 @@ const VIDEOS = [
     collabScore: 4.7, collabCount: 184,
     likes: 531200, comments: 7650, shares: 23800, saves: 18900,
     thumbnail: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/TbixociDmPY",
   },
   {
     id: "3",
@@ -51,6 +54,7 @@ const VIDEOS = [
     collabScore: 4.8, collabCount: 521,
     likes: 892400, comments: 11200, shares: 45600, saves: 32100,
     thumbnail: "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/nQ4H5WUpKyA",
   },
   {
     id: "4",
@@ -63,6 +67,7 @@ const VIDEOS = [
     collabScore: 4.5, collabCount: 97,
     likes: 127600, comments: 3450, shares: 8900, saves: 15700,
     thumbnail: "https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/oYxTTirKY8M",
   },
   {
     id: "5",
@@ -75,6 +80,7 @@ const VIDEOS = [
     collabScore: 4.6, collabCount: 238,
     likes: 344900, comments: 6780, shares: 19200, saves: 24600,
     thumbnail: "https://images.unsplash.com/photo-1540569876291-7b03b5441327?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/xBasQG_6p40",
   },
 ];
 
@@ -781,6 +787,15 @@ export default function App() {
               onClick={() => setPaused((p) => !p)}
             >
               <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${video.thumbnail})` }} />
+
+              {/* YouTube video background */}
+              <YouTubePlayer
+                videoUrl={video.videoUrl}
+                username={video.username}
+                isActive={idx === feed.findIndex((v) => v.id === video.id)}
+                paused={paused}
+              />
+
               <div className="absolute inset-0" style={{ background: "linear-gradient(to bottom,rgba(0,0,0,0.25) 0%,transparent 25%,transparent 55%,rgba(0,0,0,0.65) 80%,rgba(0,0,0,0.85) 100%)" }} />
 
               {/* Top bar */}
