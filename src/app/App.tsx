@@ -8,6 +8,8 @@ import { InboxScreen } from "./Inbox";
 import { YouTubePlayer } from "./components/YouTubePlayer";
 import { ThemeContext, useTheme } from "./ThemeContext";
 import { motion, AnimatePresence } from "motion/react";
+import { MetaverseHub } from "./Metaverse";
+import { HoloProfile } from "./HoloProfile";
 import {
   Heart, MessageCircle, Bookmark, Music,
   Home, Search, Plus, Mail, User, X, Send, Check,
@@ -883,6 +885,7 @@ export default function App() {
         >
           {/* ── Video slides ── */}
           <AnimatePresence initial={false} custom={dir} mode="wait">
+            {video && (
             <motion.div key={video.id} custom={dir}
               initial={{ y: dir > 0 ? "100%" : "-100%", opacity: 0.4 }}
               animate={{ y: 0, opacity: 1 }}
