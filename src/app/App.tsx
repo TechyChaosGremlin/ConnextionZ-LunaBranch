@@ -8,8 +8,8 @@ import { InboxScreen } from "./Inbox";
 import { YouTubePlayer } from "./components/YouTubePlayer";
 import { ThemeContext, useTheme } from "./ThemeContext";
 import { motion, AnimatePresence } from "motion/react";
-import { MetaverseHub } from "./Metaverse";
-import { HoloProfile } from "./HoloProfile";
+// import { MetaverseHub } from "./Metaverse";
+// import { HoloProfile } from "./HoloProfile";
 import {
   Heart, MessageCircle, Bookmark, Music,
   Home, Search, Plus, Mail, User, X, Send, Check,
@@ -1051,7 +1051,7 @@ export default function App() {
           </AnimatePresence>
 
           {/* ── Holo Profile ── pushed from Settings, so Back returns there */}
-          <AnimatePresence>
+          {/* <AnimatePresence>
             {screen === "holoprofile" && (
               <motion.div key="holoprofile" className="absolute inset-0 z-40 overflow-y-auto"
                 initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }}
@@ -1059,10 +1059,10 @@ export default function App() {
                 <HoloProfile onBack={() => setScreen("profile")} />
               </motion.div>
             )}
-          </AnimatePresence>
+          </AnimatePresence> */}
 
           {/* ── Metaverse ── entered from the feed orb */}
-          <AnimatePresence>
+          {/* <AnimatePresence>
             {screen === "metaverse" && (
               <motion.div key="metaverse" className="absolute inset-0 z-40"
                 initial={{ opacity: 0, scale: 1.04 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1.04 }}
@@ -1070,7 +1070,7 @@ export default function App() {
                 <MetaverseHub onBack={() => setScreen("feed")} />
               </motion.div>
             )}
-          </AnimatePresence>
+          </AnimatePresence> */}
 
           {/* ── Delete profile modal ── */}
           <AnimatePresence>
