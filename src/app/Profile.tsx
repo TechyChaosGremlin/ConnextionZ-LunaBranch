@@ -16,7 +16,7 @@
 // changes. Follow state already comes from `follow-store.ts`, which owns its own
 // endpoint seam.
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft, Clock, Film, Link2, ListMusic, MapPin, Sparkles, Users, X,
@@ -35,6 +35,7 @@ import {
   StatCounts, Thumb, VerifiedBadge, formatCount, useScrolled,
 } from "./profile-ui";
 import { AvatarPicker } from "./avatar-picker";
+import { fetchMeProfile, fetchProfileByUsername } from "./profile-graphql";
 
 type ProfileTab = "posts" | "playlists" | "collabs";
 
@@ -48,31 +49,77 @@ type ProfileTab = "posts" | "playlists" | "collabs";
 export function useOwnCreator(): Creator {
   const viewer = useViewer();
   const followingCount = useFollowingCount();
-  // Posts the viewer has published in this session sit ahead of the seeded back
-  // catalogue, so a new upload is the first tile on the grid.
   const posts = useOwnContent();
+  const [remoteProfile, setRemoteProfile] = useState<Creator | null>(null);
 
-  return useMemo<Creator>(() => ({
-    id: "me",
-    username: viewer.username,
-    displayName: viewer.displayName,
-    avatarUrl: viewer.avatarUrl,
-    avatarColor: viewer.avatarColor,
-    bio: viewer.bio,
-    location: viewer.location,
-    website: viewer.website,
-    verified: false,
-    online: true,
-    collabStatus: "Available for Collaboration",
-    collabScore: OWN_STATS.collabScore,
-    collabCount: OWN_STATS.collabCount,
-    followers: OWN_STATS.followers,
-    following: followingCount,
-    openToCollab: true,
-    responseTime: "< 4 hours",
-    posts,
-    playlists: OWN_PLAYLISTS,
-  }), [viewer, followingCount, posts]);
+  useEffect(() => {
+    let active = true;
+    fetchMeProfile().then((profile) => {
+      if (!active || !profile) return;
+      setRemoteProfile({
+        id: profile.id,
+        username: profile.username,
+        displayName: profile.displayName ?? profile.username,
+        avatarUrl: profile.avatarUrl ?? "",
+        avatarColor: profile.avatarColor ?? "#00AEEF",
+        bio: profile.bio ?? "",
+        location: profile.location ?? "",
+        website: profile.website ?? "",
+        verified: !!profile.verified,
+        online: !!profile.online,
+        collabStatus: profile.collabStatus ?? "Available for Collaboration",
+        collabScore: profile.collabScore ?? OWN_STATS.collabScore,
+        collabCount: profile.collabCount ?? OWN_STATS.collabCount,
+        followers: profile.followers ?? OWN_STATS.followers,
+        following: followingCount,
+        openToCollab: profile.openToCollab ?? true,
+        responseTime: profile.responseTime ?? "< 4 hours",
+        posts: (profile.posts ?? []).map((p) => ({
+          id: p.id,
+          thumbnail: p.thumbnail,
+          caption: p.caption,
+          views: p.views,
+          likes: p.likes,
+          ...(p.collabWith ? { collabWith: p.collabWith } : {}),
+        })),
+        playlists: (profile.playlists ?? []).map((p) => ({
+          id: p.id,
+          title: p.title,
+          cover: p.cover,
+          itemLabel: p.itemLabel,
+          plays: p.plays,
+        })),
+      });
+    });
+
+    return () => { active = false; };
+  }, [followingCount]);
+
+  return useMemo<Creator>(() => {
+    const base: Creator = {
+      id: "me",
+      username: viewer.username,
+      displayName: viewer.displayName,
+      avatarUrl: viewer.avatarUrl,
+      avatarColor: viewer.avatarColor,
+      bio: viewer.bio,
+      location: viewer.location,
+      website: viewer.website,
+      verified: false,
+      online: true,
+      collabStatus: "Available for Collaboration",
+      collabScore: OWN_STATS.collabScore,
+      collabCount: OWN_STATS.collabCount,
+      followers: OWN_STATS.followers,
+      following: followingCount,
+      openToCollab: true,
+      responseTime: "< 4 hours",
+      posts,
+      playlists: OWN_PLAYLISTS,
+    };
+
+    return remoteProfile ?? base;
+  }, [viewer, followingCount, posts, remoteProfile]);
 }
 
 // ─── SCREEN ──────────────────────────────────────────────────────────────────

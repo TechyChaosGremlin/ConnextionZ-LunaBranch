@@ -10,6 +10,7 @@ import { HoloProfile } from "./HoloProfile";
 import { MetaverseHub } from "./Metaverse";
 import { ThemeContext, useTheme } from "./ThemeContext";
 import { type Creator, type FeedVideo, OWN_STATS, creatorById, creatorByUsername, identityOf } from "./creators";
+import { fetchProfileByUsername } from "./profile-graphql";
 import { activateFollowGraph, useFollow, useFollowingIds } from "./follow-store";
 import { SessionProvider } from "./session";
 import { ProfileScreen, useOwnCreator } from "./Profile";
@@ -17,7 +18,7 @@ import { Avatar, CollabScorePill, ViewerAvatar, VerifiedBadge, formatCount } fro
 import { useFeed } from "./feed-store";
 import { OWN_CREATOR_ID, activatePosts, useOwnFeedVideos } from "./posts-store";
 import { UploadScreen } from "./Upload";
-import { SearchScreen } from "./Search";
+import { SearchScreen } from "./Search.tsx";
 import { NotificationsScreen } from "./Notifications";
 import { DashboardScreen } from "./Dashboard";
 import { activateNotifications, notify, useUnreadCount } from "./notifications-store";
@@ -945,9 +946,62 @@ export default function App() {
     setScreen("settings");
   }, []);
 
-  const visitedCreator = profileStack.length
-    ? creatorByUsername(profileStack[profileStack.length - 1])
-    : undefined;
+  const [visitedCreator, setVisitedCreator] = useState<Creator | undefined>(undefined);
+
+  useEffect(() => {
+    if (profileStack.length === 0) {
+      setVisitedCreator(undefined);
+      return;
+    }
+
+    const username = profileStack[profileStack.length - 1];
+    const localCreator = creatorByUsername(username);
+    if (localCreator) {
+      setVisitedCreator(localCreator);
+      return;
+    }
+
+    let active = true;
+    fetchProfileByUsername(username).then((profile) => {
+      if (!active || !profile) return;
+      setVisitedCreator({
+        id: profile.id,
+        username: profile.username,
+        displayName: profile.displayName ?? profile.username,
+        avatarUrl: profile.avatarUrl ?? "",
+        avatarColor: profile.avatarColor ?? "#00AEEF",
+        bio: profile.bio ?? "",
+        location: profile.location ?? "",
+        website: profile.website ?? "",
+        verified: !!profile.verified,
+        online: !!profile.online,
+        collabStatus: profile.collabStatus ?? "Available for Collaboration",
+        collabScore: profile.collabScore ?? 0,
+        collabCount: profile.collabCount ?? 0,
+        followers: profile.followers ?? 0,
+        following: profile.following ?? 0,
+        openToCollab: profile.openToCollab ?? true,
+        responseTime: profile.responseTime ?? "< 24 hours",
+        posts: (profile.posts ?? []).map((p) => ({
+          id: p.id,
+          thumbnail: p.thumbnail,
+          caption: p.caption,
+          views: p.views,
+          likes: p.likes,
+          ...(p.collabWith ? { collabWith: p.collabWith } : {}),
+        })),
+        playlists: (profile.playlists ?? []).map((p) => ({
+          id: p.id,
+          title: p.title,
+          cover: p.cover,
+          itemLabel: p.itemLabel,
+          plays: p.plays,
+        })),
+      });
+    });
+
+    return () => { active = false; };
+  }, [profileStack]);
 
   /**
    * A tile that is also a feed post jumps the feed to that slide. Back catalogue
