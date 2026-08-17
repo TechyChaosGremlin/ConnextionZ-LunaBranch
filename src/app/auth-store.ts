@@ -1,4 +1,5 @@
 // ─── ACCOUNT STORE ───────────────────────────────────────────────────────────
+import { updateMeProfile, uploadMediaFile } from "./profile-graphql";
 //
 // ⚠️  PROTOTYPE CREDENTIAL STUB — THIS IS NOT AUTHENTICATION.
 //
@@ -60,6 +61,8 @@ export interface Profile {
   avatarUrl?: string;
   location: string;
   website: string;
+  collabStatus?: string;
+  openToCollab?: boolean;
 }
 
 export interface Account {
@@ -155,6 +158,115 @@ function write(key: string, value: unknown): boolean {
   }
 }
 
+// ─── BACKEND INTEGRATION ─────────────────────────────────────────────────────
+//
+// These functions try to use the Python backend API. If unavailable, they
+// fall back to the prototype localStorage-based auth.
+
+const BACKEND_API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8002";
+
+async function tryBackendSignIn(email: string, password: string): Promise<Result<Account> | null> {
+  try {
+    const res = await fetch(`${BACKEND_API_URL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({ email, password }),
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      return { ok: false, error: error.detail || "Login failed" };
+    }
+
+    const data = await res.json();
+    if (!data.ok || !data.user) return null;
+
+    // Create an Account object from the backend response
+    const account: Account = {
+      firstName: data.user.email.split("@")[0],
+      lastName: "",
+      email: data.user.email,
+      providers: [],
+      profile: data.profile ? {
+        username: data.profile.username,
+        displayName: data.profile.displayName || data.profile.username,
+        bio: data.profile.bio || "",
+        avatarColor: "#00AEEF",
+        location: "",
+        website: "",
+      } : undefined,
+    };
+
+    // Mark that we got auth from backend so getSession can use it
+    write("connextionz.backend_auth", true);
+    return { ok: true, value: account };
+  } catch (error) {
+    console.warn("Backend login unavailable, falling back to demo", error);
+    return null;
+  }
+}
+
+async function tryBackendRegister(input: {
+  firstName: string; lastName: string; email: string; password: string;
+}): Promise<Result<Account> | null> {
+  try {
+    const res = await fetch(`${BACKEND_API_URL}/auth/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        email: input.email,
+        password: input.password,
+        username: input.email.split("@")[0],
+        display_name: `${input.firstName} ${input.lastName}`.trim(),
+      }),
+    });
+
+    if (!res.ok) {
+      const error = await res.json();
+      return { ok: false, error: error.detail || "Registration failed" };
+    }
+
+    const data = await res.json();
+    if (!data.ok || !data.user) return null;
+
+    const account: Account = {
+      firstName: input.firstName,
+      lastName: input.lastName,
+      email: input.email,
+      providers: [],
+      profile: data.profile ? {
+        username: data.profile.username,
+        displayName: data.profile.displayName,
+        bio: data.profile.bio || "",
+        avatarColor: "#00AEEF",
+        location: "",
+        website: "",
+      } : undefined,
+    };
+
+    write("connextionz.backend_auth", true);
+    return { ok: true, value: account };
+  } catch (error) {
+    console.warn("Backend register unavailable, falling back to demo", error);
+    return null;
+  }
+}
+
+async function tryBackendLogout(): Promise<boolean> {
+  try {
+    await fetch(`${BACKEND_API_URL}/auth/logout`, {
+      method: "POST",
+      credentials: "include",
+    });
+    write("connextionz.backend_auth", false);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function loadAccounts(): Account[] {
   const list = read<Account[]>(ACCOUNTS_KEY, []);
   if (!Array.isArray(list)) return [structuredClone(DEMO_ACCOUNT)];
@@ -188,6 +300,11 @@ function makeToken(): string {
 // ─── SIGN IN ─────────────────────────────────────────────────────────────────
 
 export async function signIn(email: string, password: string): Promise<Result<Account>> {
+  // Try backend first
+  const backendResult = await tryBackendSignIn(email, password);
+  if (backendResult !== null) return backendResult;
+
+  // Fall back to demo auth
   await delay(900);
   const account = findAccount(loadAccounts(), email);
 
@@ -210,6 +327,11 @@ export async function signIn(email: string, password: string): Promise<Result<Ac
 export async function register(input: {
   firstName: string; lastName: string; email: string; password: string;
 }): Promise<Result<Account>> {
+  // Try backend first
+  const backendResult = await tryBackendRegister(input);
+  if (backendResult !== null) return backendResult;
+
+  // Fall back to demo registration
   await delay(1100);
   const accounts = loadAccounts();
 
@@ -341,8 +463,14 @@ export function startSession(email: string) {
 }
 
 export function endSession() {
+  // Try to logout from backend
+  tryBackendLogout().catch(() => {
+    /* Backend unavailable, that's okay */
+  });
+  
   try {
     localStorage.removeItem(SESSION_KEY);
+    localStorage.removeItem("connextionz.backend_auth");
   } catch {
     /* Storage disabled — nothing was persisted to clear. */
   }
@@ -358,6 +486,54 @@ export async function updateProfile(
   email: string,
   patch: Partial<Profile>,
 ): Promise<Result<Account>> {
+  let avatarUrl = patch.avatarUrl;
+  if (avatarUrl?.startsWith("data:")) {
+    const avatarBlob = await fetch(avatarUrl).then((response) => response.blob());
+    const uploadedAvatar = await uploadMediaFile(avatarBlob, "avatar.webp");
+    if (!uploadedAvatar) {
+      return { ok: false, error: "The profile photo could not be uploaded. Try again." };
+    }
+    avatarUrl = uploadedAvatar;
+  }
+  const backendProfile = await updateMeProfile({
+    username: patch.username,
+    displayName: patch.displayName,
+    bio: patch.bio,
+    location: patch.location,
+    website: patch.website,
+    avatarUrl,
+    avatarColor: patch.avatarColor,
+    collabStatus: patch.collabStatus,
+    openToCollab: patch.openToCollab,
+  });
+  if (backendProfile) {
+    const accounts = loadAccounts();
+    const account = findAccount(accounts, email);
+    const base = account ?? {
+      firstName: email.split("@")[0],
+      lastName: "",
+      email,
+      providers: [],
+    };
+    return {
+      ok: true,
+      value: {
+        ...base,
+        profile: {
+          username: backendProfile.username,
+          displayName: backendProfile.displayName,
+          bio: backendProfile.bio ?? "",
+          avatarColor: backendProfile.avatarColor ?? "#00AEEF",
+          avatarUrl: backendProfile.avatarUrl ?? undefined,
+          location: backendProfile.location ?? "",
+          website: backendProfile.website ?? "",
+          collabStatus: backendProfile.collabStatus ?? "Open to Collaboration",
+          openToCollab: backendProfile.openToCollab ?? true,
+        },
+      },
+    };
+  }
+
   await delay(700);
   const accounts = loadAccounts();
   const account = findAccount(accounts, email);

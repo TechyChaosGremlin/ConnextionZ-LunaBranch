@@ -28,6 +28,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { type Result } from "./auth-store";
 import { type ContentItem, type FeedVideo, OWN_POSTS } from "./creators";
 import { type MediaKind, type PickedMedia, capturePoster } from "./media-upload";
+import { createPost as createBackendPost, uploadMediaFile } from "./profile-graphql";
 
 const POSTS_KEY = "connextionz.posts";
 
@@ -248,11 +249,18 @@ export async function publishPost(
   // for the decode. A clip that refuses to give up a frame still posts.
   const poster = await capturePoster(media, Math.min(1, media.durationSec / 3));
 
+  const uploadedMedia = await fetch(media.url)
+    .then((response) => response.blob())
+    .then((blob) => uploadMediaFile(blob, media.name));
+  const uploadedPoster = poster
+    ? await fetch(poster).then((response) => response.blob()).then((blob) => uploadMediaFile(blob, "poster.jpg"))
+    : null;
+
   const post: OwnPost = {
     id: uid(),
     kind: media.kind,
     createdAt: Date.now(),
-    thumbnail: poster ?? "",
+    thumbnail: uploadedPoster ?? poster ?? "",
     caption: draft.caption.trim(),
     hashtags: draft.hashtags,
     audio: draft.audio.trim() || "Original Sound",
@@ -265,9 +273,27 @@ export async function publishPost(
     comments: 0,
     shares: 0,
     saves: 0,
-    mediaUrl: uploaded.value,
+    mediaUrl: uploadedMedia ?? uploaded.value,
     ...(draft.collabWith ? { collabWith: draft.collabWith } : {}),
   };
+
+  const backendPost = uploadedMedia && uploadedPoster ? await createBackendPost({
+    thumbnail: uploadedPoster,
+    mediaUrl: uploadedMedia,
+    caption: post.caption,
+    hashtags: post.hashtags,
+    audio: post.audio,
+    visibility: post.visibility,
+    allowComments: post.allowComments,
+    allowCollabs: post.allowCollabs,
+    durationSec: post.durationSec,
+    ...(post.collabWith ? { collabWith: post.collabWith } : {}),
+  }) : null;
+  if (backendPost) {
+    post.id = backendPost.id;
+    post.views = backendPost.views;
+    post.likes = backendPost.likes;
+  }
 
   const previous = posts;
   posts = [post, ...posts];

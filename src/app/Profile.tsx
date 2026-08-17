@@ -23,7 +23,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "./ThemeContext";
 import { ACCENT, useTokens, EmptyState } from "./settings-ui";
-import { type Creator, OWN_PLAYLISTS, OWN_STATS, creatorById } from "./creators";
+import { registerCreator, type Creator, OWN_PLAYLISTS, OWN_STATS, creatorById } from "./creators";
 import { useOwnContent } from "./posts-store";
 import {
   followingIds, ownFollowerCreators, useFollowerCount, useFollowingCount, useFollowingCreators,
@@ -35,7 +35,7 @@ import {
   StatCounts, Thumb, VerifiedBadge, formatCount, useScrolled,
 } from "./profile-ui";
 import { AvatarPicker } from "./avatar-picker";
-import { fetchMeProfile, fetchProfileByUsername } from "./profile-graphql";
+import { fetchMeProfile, fetchMyFollowers, fetchMyFollowing, fetchProfileByUsername } from "./profile-graphql";
 
 type ProfileTab = "posts" | "playlists" | "collabs";
 
@@ -407,10 +407,22 @@ function ConnectionsSheet({
 
   const followingCount = useFollowingCount();
   const liveFollowing = useFollowingCreators();
+  const [remoteFollowing, setRemoteFollowing] = useState<Creator[] | null>(null);
+  const [remoteFollowers, setRemoteFollowers] = useState<Creator[] | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([fetchMyFollowing(), fetchMyFollowers()]).then(([following, followers]) => {
+      if (!active) return;
+      if (following !== null) setRemoteFollowing(following.map(registerCreator));
+      if (followers !== null) setRemoteFollowers(followers.map(registerCreator));
+    });
+    return () => { active = false; };
+  }, []);
   // Snapshot on open — see the note above. `liveFollowing` is still what seeds
   // it, so a creator followed after opening the sheet is picked up on reopen.
   const [snapshotIds] = useState<string[]>(() => followingIds());
-  const followingRows = useMemo(() => {
+  const localFollowingRows = useMemo(() => {
     const seen = new Set<string>();
     const rows = [...snapshotIds, ...liveFollowing.map((c) => c.id)]
       .filter((id) => (seen.has(id) ? false : (seen.add(id), true)))
@@ -419,7 +431,8 @@ function ConnectionsSheet({
     return rows;
   }, [snapshotIds, liveFollowing]);
 
-  const followerRows = useMemo(() => ownFollowerCreators(), []);
+  const followerRows = remoteFollowers ?? ownFollowerCreators();
+  const followingRows = remoteFollowing ?? localFollowingRows;
   const rows = tab === "following" ? followingRows : followerRows;
 
   return (

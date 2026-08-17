@@ -334,6 +334,43 @@ export const creatorById = (id: string): Creator | undefined => BY_ID.get(id);
 export const creatorByUsername = (username: string): Creator | undefined =>
   BY_USERNAME.get(username.trim().replace(/^@/, "").toLowerCase());
 
+export function registerCreator(input: {
+  id: string;
+  username: string;
+  displayName: string;
+  avatarUrl?: string | null;
+  avatarColor?: string | null;
+  verified?: boolean | null;
+}): Creator {
+  const existing = BY_ID.get(input.id);
+  if (existing) return existing;
+  const creator: Creator = {
+    id: input.id,
+    username: input.username,
+    displayName: input.displayName || input.username,
+    avatarUrl: input.avatarUrl ?? "",
+    avatarColor: input.avatarColor ?? "#00AEEF",
+    bio: "",
+    location: "",
+    website: "",
+    verified: !!input.verified,
+    online: true,
+    collabStatus: "Open to Collaboration",
+    collabScore: 0,
+    collabCount: 0,
+    followers: 0,
+    following: 0,
+    openToCollab: true,
+    responseTime: "< 4 hours",
+    posts: [],
+    playlists: [],
+  };
+  CREATORS.push(creator);
+  BY_ID.set(creator.id, creator);
+  BY_USERNAME.set(creator.username.toLowerCase(), creator);
+  return creator;
+}
+
 /** For rows that only carry a handle (comments, live chat) and must still render. */
 export function identityOf(username: string): { username: string; avatarUrl: string; avatarColor: string; displayName: string } {
   const creator = creatorByUsername(username);

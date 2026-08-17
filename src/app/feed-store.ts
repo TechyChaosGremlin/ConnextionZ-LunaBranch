@@ -18,7 +18,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { type Result } from "./auth-store";
-import { FEED, type FeedVideo } from "./creators";
+import { registerCreator, type FeedVideo } from "./creators";
+import { fetchFeedPageFromApi } from "./profile-graphql";
 
 export interface FeedPage {
   items: FeedVideo[];
@@ -26,49 +27,36 @@ export interface FeedPage {
   cursor: string | null;
 }
 
-/** Enough pages to prove the loop works without pretending to be infinite. */
-const MAX_PAGES = 6;
-const PAGE_DELAY_MS = 620;
-
-/**
- * Page 0 is the seeded feed. Later pages re-serve it with fresh ids and shifted
- * counters — the same thing a recommendation feed does when it resurfaces a post
- * for a different viewer, and enough for the paging behaviour to be real.
- */
-function pageAt(page: number): FeedVideo[] {
-  if (page === 0) return FEED;
-  const rotation = page % FEED.length;
-  const rotated = [...FEED.slice(rotation), ...FEED.slice(0, rotation)];
-  return rotated.map((video, i) => {
-    const factor = 0.72 + ((page * 7 + i * 3) % 11) / 20;
-    return {
-      ...video,
-      id: `${video.id}-p${page}`,
-      views: Math.round(video.views * factor),
-      likes: Math.round(video.likes * factor),
-      comments: Math.round(video.comments * factor),
-      shares: Math.round(video.shares * factor),
-      saves: Math.round(video.saves * factor),
-    };
-  });
-}
-
-const cursorFor = (page: number) => (page + 1 < MAX_PAGES ? `page:${page + 1}` : null);
-
-const pageOf = (cursor: string | null) => {
-  if (!cursor) return 0;
-  const parsed = Number.parseInt(cursor.replace("page:", ""), 10);
-  return Number.isFinite(parsed) ? parsed : 0;
-};
-
 /** The network seam. Fails the way a fetch does when the browser is offline. */
 export async function fetchFeedPage(cursor: string | null): Promise<Result<FeedPage>> {
-  await new Promise((r) => setTimeout(r, PAGE_DELAY_MS));
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
     return { ok: false, error: "You're offline. Reconnect to load the feed." };
   }
-  const page = pageOf(cursor);
-  return { ok: true, value: { items: pageAt(page), cursor: cursorFor(page) } };
+  const page = await fetchFeedPageFromApi(cursor);
+  if (!page) return { ok: false, error: "The feed could not be loaded. Try again." };
+  return {
+    ok: true,
+    value: {
+      items: page.items.map((post): FeedVideo => {
+        registerCreator(post.creator);
+        return {
+          id: post.id,
+          creatorId: post.creator.id,
+          thumbnail: post.thumbnail,
+          caption: post.caption,
+          views: post.views,
+          likes: post.likes,
+          comments: post.comments ?? 0,
+          shares: post.shares ?? 0,
+          saves: post.saves ?? 0,
+          hashtags: post.hashtags ?? [],
+          audio: post.audio ?? "Original Sound",
+          ...(post.collabWith ? { collabWith: post.collabWith } : {}),
+        };
+      }),
+      cursor: page.nextCursor,
+    },
+  };
 }
 
 // ─── HOOK ────────────────────────────────────────────────────────────────────

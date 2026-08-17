@@ -25,6 +25,7 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { type Result } from "./auth-store";
 import { CREATORS, type Creator, creatorById } from "./creators";
+import { fetchMyFollowing, followProfile, unfollowProfile } from "./profile-graphql";
 
 const FOLLOWS_KEY = "connextionz.follows";
 
@@ -103,6 +104,11 @@ export function activateFollowGraph(email: string | null) {
   following = new Set(Array.isArray(stored) ? stored : SEED_FOLLOWING);
   pending = new Set();
   publish();
+  void fetchMyFollowing().then((profiles) => {
+    if (profiles === null || activeEmail !== key(email)) return;
+    following = new Set(profiles.map((profile) => profile.id));
+    publish();
+  });
 }
 
 // ─── READS ───────────────────────────────────────────────────────────────────
@@ -115,8 +121,14 @@ export const followingIds = () => idsSnapshot;
 
 /** The network seam. Resolves once the follow is durable. */
 async function requestFollow(creatorId: string, next: boolean): Promise<Result<boolean>> {
-  await new Promise((r) => setTimeout(r, 260));
   if (!activeEmail) return { ok: false, error: "Sign in to follow creators." };
+  const identifier = creatorById(creatorId)?.username ?? creatorId;
+  const backendResult = next
+    ? await followProfile(identifier)
+    : await unfollowProfile(identifier);
+  if (backendResult !== null) return { ok: true, value: backendResult };
+
+  await new Promise((r) => setTimeout(r, 260));
   const ids = next
     ? [...new Set([...following, creatorId])]
     : [...following].filter((id) => id !== creatorId);
