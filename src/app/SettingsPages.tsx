@@ -1,16 +1,18 @@
 // ─── SETTINGS DESTINATIONS ───────────────────────────────────────────────────
 //
-// One component per row in the Settings list. Every row in `SettingsScreen`
-// resolves to exactly one `SettingsRoute` here, so no menu option is a dead end.
+// This file used to hold every settings page. Those have moved to
+// `src/app/pages/`, each destination in its own component file. This module now
+// only wires them into the `SettingsRoute` → component table that
+// `Settings.tsx` consumes, so `SettingsPages` keeps its public surface for
+// existing importers while the implementation lives with the other pages.
 //
-// Two save models are used deliberately:
+// Two save models are used deliberately across the pages:
 //   • Forms that can fail validation (profile, password) have an explicit
 //     submit button and surface the store's error.
 //   • Preference screens write on every tap and confirm with `SavedPill`, so a
 //     user who backs out never silently loses a change.
 
-import { useMemo, useState, type ReactElement, type ReactNode } from "react";
-import { motion, AnimatePresence } from "motion/react";
+import type { ReactElement } from "react";
 import {
   Bell, Shield, Users, Clock, Briefcase, HelpCircle, Flag, FileText, Lock,
   Check, Plus, Trash2, Star, ChevronDown, Search, Eye, TrendingUp, Heart,
@@ -1123,7 +1125,9 @@ export const PrivacyPolicyPage = ({ t, onBack }: PageProps) => <LegalPage doc={P
 //
 // Exhaustive by construction: `SettingsRoute` and this record are typed
 // together, so a route added without a page is a compile error rather than a
-// row that silently does nothing.
+// row that silently does nothing. Components are re-exported for convenience.
+
+export type { SettingsRoute, PageProps } from "./pages";
 
 export const SETTINGS_PAGES: Record<SettingsRoute, (props: PageProps) => ReactElement> = {
   editProfile: EditProfilePage,
