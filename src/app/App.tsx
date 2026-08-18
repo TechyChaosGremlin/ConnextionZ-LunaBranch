@@ -17,19 +17,17 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   Heart, MessageCircle, Bookmark, Music, Bell, BarChart3, Radio, Upload as UploadIcon,
   Home, Search, Plus, Mail, User, X, Send, Check, Loader2, RefreshCw, WifiOff,
-  ChevronUp, ChevronDown, Navigation, Globe,
+  ChevronUp, ChevronDown, Navigation,
 } from "lucide-react";
 
 const DashboardScreen = lazy(() => import("./Dashboard").then((module) => ({ default: module.DashboardScreen })));
 const DeleteProfileModal = lazy(() => import("./Settings").then((module) => ({ default: module.DeleteProfileModal })));
 const InboxScreen = lazy(() => import("./Inbox").then((module) => ({ default: module.InboxScreen })));
-const MetaverseHub = lazy(() => import("./Metaverse").then((module) => ({ default: module.MetaverseHub })));
 const NotificationsScreen = lazy(() => import("./Notifications").then((module) => ({ default: module.NotificationsScreen })));
 const SearchScreen = lazy(() => import("./Search.tsx").then((module) => ({ default: module.SearchScreen })));
 const SettingsScreen = lazy(() => import("./Settings").then((module) => ({ default: module.SettingsScreen })));
 const TrendingSounds = lazy(() => import("./TrendingSounds").then((module) => ({ default: module.TrendingSounds })));
 const UploadScreen = lazy(() => import("./Upload").then((module) => ({ default: module.UploadScreen })));
-const HoloProfile = lazy(() => import("./HoloProfile").then((module) => ({ default: module.HoloProfile })));
 
 // ─── DATA ────────────────────────────────────────────────────────────────────
 //
@@ -786,7 +784,7 @@ const FRAME = "relative overflow-hidden w-full h-full";
 
 type Screen =
   | "feed" | "search" | "discover" | "profile" | "settings" | "inbox"
-  | "notifications" | "dashboard" | "holoprofile" | "metaverse";
+  | "notifications" | "dashboard";
 
 export default function App() {
   // The signed-in account, restored from the persisted session on load. The
@@ -1306,32 +1304,6 @@ export default function App() {
             </motion.div>
             )}
           </AnimatePresence>
-          {/* ── Metaverse portal orb ── */}
-          <AnimatePresence>
-            {screen === "feed" && (
-              <motion.button
-                key="metaverse-orb"
-                initial={{ opacity: 0, scale: 0.6 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.6 }}
-                whileHover={{ scale: 1.12 }}
-                whileTap={{ scale: 0.9 }}
-                onClick={() => setScreen("metaverse")}
-                className="absolute z-20 flex flex-col items-center gap-1"
-                style={{ bottom: 88, right: 16 }}
-              >
-                <motion.div
-                  animate={{ boxShadow: ["0 0 14px rgba(124,58,237,0.5)", "0 0 28px rgba(0,174,239,0.7)", "0 0 14px rgba(124,58,237,0.5)"] }}
-                  transition={{ duration: 2.5, repeat: Infinity }}
-                  className="w-12 h-12 rounded-full flex items-center justify-center"
-                  style={{ background: "linear-gradient(135deg,#7c3aed,#00AEEF)" }}
-                >
-                  <Globe className="w-5 h-5 text-white" />
-                </motion.div>
-                <span className="text-[9px] font-bold tracking-wider" style={{ color: "#00AEEF" }}>METAVERSE</span>
-              </motion.button>
-            )}
-          </AnimatePresence>
           {/* ── Bottom nav ── the feed and your own profile are tabs, so the bar
               stays visible on both (z-40 clears the profile at z-30). Pushed
               screens — inbox, settings, a creator's profile — cover it, since
@@ -1510,30 +1482,7 @@ export default function App() {
                   onAccountChange={setAccount}
                   isDark={isDark}
                   onToggleTheme={() => setIsDark((d) => !d)}
-                  onOpenHoloProfile={() => setScreen("holoprofile")}
                 />
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* ── Holo Profile ── pushed from Settings, so Back returns there */}
-          <AnimatePresence>
-            {screen === "holoprofile" && (
-              <motion.div key="holoprofile" className="absolute inset-0 z-40 overflow-y-auto"
-                initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }}
-                transition={{ duration: 0.3 }}>
-                <HoloProfile onBack={() => setScreen("settings")} />
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* ── Metaverse ── entered from the feed orb */}
-          <AnimatePresence>
-            {screen === "metaverse" && (
-              <motion.div key="metaverse" className="absolute inset-0 z-40"
-                initial={{ opacity: 0, scale: 1.04 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1.04 }}
-                transition={{ duration: 0.35 }}>
-                <MetaverseHub onBack={() => setScreen("feed")} />
               </motion.div>
             )}
           </AnimatePresence>
