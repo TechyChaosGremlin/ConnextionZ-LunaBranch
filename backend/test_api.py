@@ -73,6 +73,24 @@ def main():
     assert me["username"] == username
     assert me["displayName"] == display_name
 
+    search_query = """
+        query SearchProfiles($query: String!) {
+          searchProfiles(query: $query) { username displayName }
+        }
+    """
+    search_results = assert_graphql_success(graphql(
+        authenticated, search_query, {"query": username}
+    ))["searchProfiles"]
+    assert any(profile["username"] == username for profile in search_results)
+
+    sounds_query = """
+        query { trendingSounds(limit: 3) { id title genre totalPlays } }
+    """
+    sounds = assert_graphql_success(graphql(
+        authenticated, sounds_query
+    ))["trendingSounds"]
+    assert sounds and sounds[0]["id"] == "s1"
+
     print("4. Update profile")
     update_query = """
         mutation UpdateProfile($input: UpdateProfileInput!) {
@@ -100,6 +118,16 @@ def main():
     assert updated["openToCollab"] is False
 
     print("5. Follow and unfollow")
+    public_profile_query = """
+        query Profile($username: String!) {
+          profile(username: $username) { username isFollowing }
+        }
+    """
+    before_follow = assert_graphql_success(graphql(
+        authenticated, public_profile_query, {"username": "luna"}
+    ))["profile"]
+    assert before_follow["isFollowing"] is False
+
     follow_query = """
         mutation Follow($username: String!) {
           follow(username: $username) { following followers followingCount }
@@ -108,11 +136,26 @@ def main():
     follow = assert_graphql_success(graphql(authenticated, follow_query, {"username": "luna"}))["follow"]
     assert follow["following"] is True
     assert follow["followingCount"] == 1
+    after_follow = assert_graphql_success(graphql(
+        authenticated, public_profile_query, {"username": "luna"}
+    ))["profile"]
+    assert after_follow["isFollowing"] is True
 
     following = assert_graphql_success(graphql(
         authenticated, "query { myFollowing { username } }"
     ))["myFollowing"]
     assert any(profile["username"] == "luna" for profile in following)
+
+    following_page_query = """
+        query { myFollowingPage(limit: 1) {
+          profiles { username }
+          nextCursor
+        } }
+    """
+    following_page = assert_graphql_success(graphql(
+        authenticated, following_page_query
+    ))["myFollowingPage"]
+    assert [profile["username"] for profile in following_page["profiles"]] == ["luna"]
 
     unfollow_query = """
         mutation Unfollow($username: String!) {
@@ -122,6 +165,10 @@ def main():
     unfollow = assert_graphql_success(graphql(authenticated, unfollow_query, {"username": "luna"}))["unfollow"]
     assert unfollow["following"] is False
     assert unfollow["followingCount"] == 0
+    after_unfollow = assert_graphql_success(graphql(
+        authenticated, public_profile_query, {"username": "luna"}
+    ))["profile"]
+    assert after_unfollow["isFollowing"] is False
 
     print("6. Logout and reject protected requests")
     logout = request_json(authenticated, "/auth/logout", {})
@@ -131,6 +178,7 @@ def main():
 
     protected_update = graphql(anonymous, update_query, {"input": {"bio": "must fail"}})
     assert protected_update.get("errors"), protected_update
+    assert protected_update["errors"][0]["extensions"]["code"] == "UNAUTHENTICATED"
 
     protected_follow = graphql(anonymous, follow_query, {"username": "luna"})
     assert protected_follow.get("errors"), protected_follow

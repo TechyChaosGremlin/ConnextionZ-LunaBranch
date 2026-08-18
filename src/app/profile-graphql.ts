@@ -32,10 +32,36 @@ export type GraphQLProfileSummary = {
   avatarUrl?: string | null;
   avatarColor?: string | null;
   verified?: boolean | null;
+  collabScore?: number | null;
+  collabCount?: number | null;
+  followers?: number | null;
+  following?: number | null;
+  openToCollab?: boolean | null;
 };
 
 export type GraphQLFeedItem = GraphQLPost & {
   creator: GraphQLProfileSummary;
+};
+
+export type GraphQLHashtagResult = {
+  tag: string;
+  posts: number;
+  views: number;
+};
+
+export type GraphQLSound = {
+  id: string;
+  title: string;
+  creator: string;
+  creatorAvatar: string;
+  artwork: string;
+  genre: string;
+  videoCount: number;
+  totalPlays: number;
+  rank: number;
+  growthPct: number;
+  duration: string;
+  bpm: number;
 };
 
 export type GraphQLProfile = {
@@ -56,6 +82,7 @@ export type GraphQLProfile = {
   following?: number | null;
   openToCollab?: boolean | null;
   responseTime?: string | null;
+  isFollowing?: boolean | null;
   posts?: GraphQLPost[] | null;
   playlists?: GraphQLPlaylist[] | null;
 };
@@ -113,6 +140,40 @@ export async function fetchFeedPageFromApi(cursor: string | null, limit = 10): P
   return data?.feed ?? null;
 }
 
+export async function searchPosts(query: string, limit = 20): Promise<GraphQLFeedItem[] | null> {
+  const data = await graphqlRequest<{ searchPosts: GraphQLFeedItem[] }>(`
+    query SearchPosts($query: String!, $limit: Int!) {
+      searchPosts(query: $query, limit: $limit) {
+        id thumbnail mediaUrl caption views likes hashtags audio visibility
+        allowComments allowCollabs durationSec comments shares saves collabWith
+        creator { id username displayName avatarUrl avatarColor verified }
+      }
+    }
+  `, { query, limit });
+  return data?.searchPosts ?? null;
+}
+
+export async function searchHashtags(query: string, limit = 20): Promise<GraphQLHashtagResult[] | null> {
+  const data = await graphqlRequest<{ searchHashtags: GraphQLHashtagResult[] }>(`
+    query SearchHashtags($query: String!, $limit: Int!) {
+      searchHashtags(query: $query, limit: $limit) { tag posts views }
+    }
+  `, { query, limit });
+  return data?.searchHashtags ?? null;
+}
+
+export async function fetchTrendingSounds(genre?: string): Promise<GraphQLSound[] | null> {
+  const data = await graphqlRequest<{ trendingSounds: GraphQLSound[] }>(`
+    query TrendingSounds($genre: String) {
+      trendingSounds(genre: $genre) {
+        id title creator creatorAvatar artwork genre videoCount totalPlays
+        rank growthPct duration bpm
+      }
+    }
+  `, { genre });
+  return data?.trendingSounds ?? null;
+}
+
 async function graphqlRequest<T>(query: string, variables?: Record<string, unknown>): Promise<T | null> {
   try {
     const res = await fetch(GRAPHQL_ENDPOINT, {
@@ -161,6 +222,7 @@ export async function fetchMeProfile(): Promise<GraphQLProfile | null> {
         following
         openToCollab
         responseTime
+        isFollowing
         posts {
           id
           thumbnail
@@ -214,6 +276,7 @@ export async function fetchProfileByUsername(username: string): Promise<GraphQLP
         following
         openToCollab
         responseTime
+        isFollowing
         posts {
           id
           thumbnail
@@ -244,6 +307,17 @@ export async function fetchProfileByUsername(username: string): Promise<GraphQLP
   `, { username });
 
   return data?.profile ?? null;
+}
+
+export async function searchProfiles(query: string, limit = 20): Promise<GraphQLProfileSummary[] | null> {
+  const data = await graphqlRequest<{ searchProfiles: GraphQLProfileSummary[] }>(`
+    query SearchProfiles($query: String!, $limit: Int!) {
+      searchProfiles(query: $query, limit: $limit) {
+        ${profileSummaryFields}
+      }
+    }
+  `, { query, limit });
+  return data?.searchProfiles ?? null;
 }
 
 export type UpdateProfilePatch = {
@@ -397,7 +471,21 @@ const profileSummaryFields = `
   avatarUrl
   avatarColor
   verified
+  collabScore
+  collabCount
+  followers
+  following
+  openToCollab
 `;
+
+export async function fetchSuggestedProfiles(limit = 6): Promise<GraphQLProfileSummary[] | null> {
+  const data = await graphqlRequest<{ suggestedProfiles: GraphQLProfileSummary[] }>(`
+    query SuggestedProfiles($limit: Int!) {
+      suggestedProfiles(limit: $limit) { ${profileSummaryFields} }
+    }
+  `, { limit });
+  return data?.suggestedProfiles ?? null;
+}
 
 export async function fetchMyFollowing(): Promise<GraphQLProfileSummary[] | null> {
   const data = await graphqlRequest<{ myFollowing: GraphQLProfileSummary[] }>(`
@@ -406,11 +494,38 @@ export async function fetchMyFollowing(): Promise<GraphQLProfileSummary[] | null
   return data?.myFollowing ?? null;
 }
 
+export type GraphQLProfilePage = {
+  profiles: GraphQLProfileSummary[];
+  nextCursor: string | null;
+};
+
+export async function fetchMyFollowingPage(after: string | null, limit = 20): Promise<GraphQLProfilePage | null> {
+  const data = await graphqlRequest<{ myFollowingPage: GraphQLProfilePage }>(`
+    query MyFollowingPage($after: String, $limit: Int!) {
+      myFollowingPage(after: $after, limit: $limit) {
+        nextCursor profiles { ${profileSummaryFields} }
+      }
+    }
+  `, { after, limit });
+  return data?.myFollowingPage ?? null;
+}
+
 export async function fetchMyFollowers(): Promise<GraphQLProfileSummary[] | null> {
   const data = await graphqlRequest<{ myFollowers: GraphQLProfileSummary[] }>(`
     query MyFollowers { myFollowers { ${profileSummaryFields} } }
   `);
   return data?.myFollowers ?? null;
+}
+
+export async function fetchMyFollowersPage(after: string | null, limit = 20): Promise<GraphQLProfilePage | null> {
+  const data = await graphqlRequest<{ myFollowersPage: GraphQLProfilePage }>(`
+    query MyFollowersPage($after: String, $limit: Int!) {
+      myFollowersPage(after: $after, limit: $limit) {
+        nextCursor profiles { ${profileSummaryFields} }
+      }
+    }
+  `, { after, limit });
+  return data?.myFollowersPage ?? null;
 }
 
 export async function followProfile(identifier: string): Promise<boolean | null> {

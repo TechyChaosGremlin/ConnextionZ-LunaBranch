@@ -4,8 +4,12 @@
 import json
 import urllib.request
 import urllib.error
+import uuid
 
 BASE_URL = "http://127.0.0.1:8002"
+TEST_SUFFIX = uuid.uuid4().hex[:10]
+TEST_EMAIL = f"alex.creates.{TEST_SUFFIX}@connextionz.app"
+TEST_USERNAME = f"alex_creates_{TEST_SUFFIX}"
 
 def register_new_account():
     """Register a new test account."""
@@ -14,9 +18,9 @@ def register_new_account():
     print("=" * 60)
     
     payload = {
-        "email": "alex.creates@connextionz.app",
+        "email": TEST_EMAIL,
         "password": "testpass123",
-        "username": "alex.creates",
+        "username": TEST_USERNAME,
         "display_name": "Alex Creates",
     }
     
@@ -50,7 +54,7 @@ def login_with_new_account():
     print("=" * 60)
     
     payload = {
-        "email": "alex.creates@connextionz.app",
+        "email": TEST_EMAIL,
         "password": "testpass123",
     }
     
@@ -137,7 +141,7 @@ def test_duplicate_registration():
     print("=" * 60)
     
     payload = {
-        "email": "alex.creates@connextionz.app",
+        "email": TEST_EMAIL,
         "password": "different_password",
         "username": "alex_duplicate",
         "display_name": "Alex Duplicate",
@@ -201,7 +205,7 @@ if __name__ == "__main__":
     print("✅ ALL TESTS PASSED")
     print("=" * 60)
     print("\nNew account created and verified:")
-    print(f"  Email: alex.creates@connextionz.app")
+    print(f"  Email: {TEST_EMAIL}")
     print(f"  Username: {username}")
     print(f"  Display Name: {reg_result['profile']['displayName']}")
     print(f"\nYou can now test this account in the web app!")

@@ -56,8 +56,8 @@ class Follow(Base):
     __tablename__ = "follows"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    follower_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
-    following_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)
+    follower_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    following_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     __table_args__ = (
@@ -69,7 +69,7 @@ class Post(Base):
     __tablename__ = "posts"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id"), nullable=False)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
 
     thumbnail: Mapped[str] = mapped_column(String(500), nullable=False)
     media_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -94,7 +94,7 @@ class Playlist(Base):
     __tablename__ = "playlists"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
-    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id"), nullable=False)
+    profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
 
     title: Mapped[str] = mapped_column(String(150), nullable=False)
     cover: Mapped[str] = mapped_column(String(500), nullable=False)
@@ -102,3 +102,20 @@ class Playlist(Base):
     plays: Mapped[int] = mapped_column(Integer, default=0)
 
     profile: Mapped[Profile] = relationship(back_populates="playlists")
+
+
+class Sound(Base):
+    __tablename__ = "sounds"
+
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    title: Mapped[str] = mapped_column(String(150), nullable=False)
+    creator: Mapped[str] = mapped_column(String(120), nullable=False)
+    creator_avatar: Mapped[str] = mapped_column(Text, nullable=False)
+    artwork: Mapped[str] = mapped_column(Text, nullable=False)
+    genre: Mapped[str] = mapped_column(String(80), nullable=False, index=True)
+    video_count: Mapped[int] = mapped_column(Integer, default=0)
+    total_plays: Mapped[int] = mapped_column(Integer, default=0)
+    rank: Mapped[int] = mapped_column(Integer, default=0)
+    growth_pct: Mapped[int] = mapped_column(Integer, default=0)
+    duration: Mapped[str] = mapped_column(String(20), default="0:30")
+    bpm: Mapped[int] = mapped_column(Integer, default=0)

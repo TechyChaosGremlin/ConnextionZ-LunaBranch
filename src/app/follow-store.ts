@@ -6,16 +6,8 @@
 // counts derived from it. So the graph lives in one module store that components
 // subscribe to, and every screen reads it through the hooks below.
 //
-// ⚠️  PROTOTYPE PERSISTENCE — localStorage, keyed per account, same caveats as
-// `auth-store`. Nothing here is a permission boundary.
-//
-// ── Replacing this with a real backend ──────────────────────────────────────
-// Only `requestFollow` talks to the network. Swap its body and every screen is
-// unchanged:
-//
-//   follow   → POST   /creators/:id/follow
-//   unfollow → DELETE /creators/:id/follow
-//   load     → GET    /me/following
+// The backend is the source of truth. This store only holds the current
+// server snapshot and optimistic state for rendering.
 //
 // Writes are optimistic: the UI flips first, the request runs, and a failure
 // rolls the graph back and surfaces the error on the button that was pressed.
@@ -24,13 +16,8 @@
 
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { type Result } from "./auth-store";
-import { CREATORS, type Creator, creatorById } from "./creators";
+import { registerCreator, type Creator, creatorById } from "./creators";
 import { fetchMyFollowing, followProfile, unfollowProfile } from "./profile-graphql";
-
-const FOLLOWS_KEY = "connextionz.follows";
-
-/** Creators a fresh account already follows, so the Following feed is not empty. */
-const SEED_FOLLOWING = ["1", "3", "5"];
 
 // ─── STATE ───────────────────────────────────────────────────────────────────
 
@@ -56,34 +43,6 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-// ─── PERSISTENCE ─────────────────────────────────────────────────────────────
-
-type FollowsByAccount = Record<string, string[]>;
-
-const key = (email: string) => email.trim().toLowerCase();
-
-function readAll(): FollowsByAccount {
-  try {
-    const raw = localStorage.getItem(FOLLOWS_KEY);
-    const parsed = raw ? JSON.parse(raw) : null;
-    return parsed && typeof parsed === "object" ? (parsed as FollowsByAccount) : {};
-  } catch {
-    return {};
-  }
-}
-
-/** Reports failure so a rejected write can roll the optimistic update back. */
-function persist(email: string, ids: string[]): boolean {
-  try {
-    const all = readAll();
-    all[key(email)] = ids;
-    localStorage.setItem(FOLLOWS_KEY, JSON.stringify(all));
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 // ─── ACTIVATION ──────────────────────────────────────────────────────────────
 
 /**
@@ -98,15 +57,14 @@ export function activateFollowGraph(email: string | null) {
     publish();
     return;
   }
-  if (activeEmail === key(email)) return;
-  activeEmail = key(email);
-  const stored = readAll()[activeEmail];
-  following = new Set(Array.isArray(stored) ? stored : SEED_FOLLOWING);
+  if (activeEmail === email.trim().toLowerCase()) return;
+  activeEmail = email.trim().toLowerCase();
+  following = new Set();
   pending = new Set();
   publish();
   void fetchMyFollowing().then((profiles) => {
-    if (profiles === null || activeEmail !== key(email)) return;
-    following = new Set(profiles.map((profile) => profile.id));
+    if (profiles === null || activeEmail !== email.trim().toLowerCase()) return;
+    following = new Set(profiles.map((profile) => registerCreator(profile).id));
     publish();
   });
 }
@@ -128,14 +86,7 @@ async function requestFollow(creatorId: string, next: boolean): Promise<Result<b
     : await unfollowProfile(identifier);
   if (backendResult !== null) return { ok: true, value: backendResult };
 
-  await new Promise((r) => setTimeout(r, 260));
-  const ids = next
-    ? [...new Set([...following, creatorId])]
-    : [...following].filter((id) => id !== creatorId);
-  if (!persist(activeEmail, ids)) {
-    return { ok: false, error: "Could not save that just now. Try again." };
-  }
-  return { ok: true, value: next };
+  return { ok: false, error: "Could not reach the follow service. Try again." };
 }
 
 /**
@@ -225,10 +176,3 @@ export function useFollowingCreators(): Creator[] {
   );
 }
 
-/**
- * Seeded stand-in for `GET /me/followers` — the prototype models who the viewer
- * follows, not who follows them, so this list is fixed rather than derived.
- */
-export function ownFollowerCreators(): Creator[] {
-  return CREATORS.filter((c) => c.id.startsWith("s")).slice(0, 10);
-}

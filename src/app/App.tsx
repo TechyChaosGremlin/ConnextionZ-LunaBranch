@@ -1,13 +1,8 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from "react";
-import { TrendingSounds } from "./TrendingSounds";
+import { lazy, Suspense, useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { AuthFlow } from "./Auth";
-import { SettingsScreen, DeleteProfileModal } from "./Settings";
 import { type SettingsRoute } from "./SettingsPages";
 import { type Account, getSession, endSession, profileOf } from "./auth-store";
 import { GoLiveSetup, CreatorLiveView, ViewerLiveView, LiveBannerStrip } from "./LiveStream";
-import { InboxScreen } from "./Inbox";
-import { HoloProfile } from "./HoloProfile";
-import { MetaverseHub } from "./Metaverse";
 import { ThemeContext, useTheme } from "./ThemeContext";
 import { type Creator, type FeedVideo, OWN_STATS, creatorById, creatorByUsername, identityOf } from "./creators";
 import { fetchProfileByUsername } from "./profile-graphql";
@@ -17,10 +12,6 @@ import { ProfileScreen, useOwnCreator } from "./Profile";
 import { Avatar, CollabScorePill, ViewerAvatar, VerifiedBadge, formatCount } from "./profile-ui";
 import { useFeed } from "./feed-store";
 import { OWN_CREATOR_ID, activatePosts, useOwnFeedVideos } from "./posts-store";
-import { UploadScreen } from "./Upload";
-import { SearchScreen } from "./Search.tsx";
-import { NotificationsScreen } from "./Notifications";
-import { DashboardScreen } from "./Dashboard";
 import { activateNotifications, notify, useUnreadCount } from "./notifications-store";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -28,6 +19,17 @@ import {
   Home, Search, Plus, Mail, User, X, Send, Check, Loader2, RefreshCw, WifiOff,
   ChevronUp, ChevronDown, Navigation, Globe,
 } from "lucide-react";
+
+const DashboardScreen = lazy(() => import("./Dashboard").then((module) => ({ default: module.DashboardScreen })));
+const DeleteProfileModal = lazy(() => import("./Settings").then((module) => ({ default: module.DeleteProfileModal })));
+const InboxScreen = lazy(() => import("./Inbox").then((module) => ({ default: module.InboxScreen })));
+const MetaverseHub = lazy(() => import("./Metaverse").then((module) => ({ default: module.MetaverseHub })));
+const NotificationsScreen = lazy(() => import("./Notifications").then((module) => ({ default: module.NotificationsScreen })));
+const SearchScreen = lazy(() => import("./Search.tsx").then((module) => ({ default: module.SearchScreen })));
+const SettingsScreen = lazy(() => import("./Settings").then((module) => ({ default: module.SettingsScreen })));
+const TrendingSounds = lazy(() => import("./TrendingSounds").then((module) => ({ default: module.TrendingSounds })));
+const UploadScreen = lazy(() => import("./Upload").then((module) => ({ default: module.UploadScreen })));
+const HoloProfile = lazy(() => import("./HoloProfile").then((module) => ({ default: module.HoloProfile })));
 
 // ─── DATA ────────────────────────────────────────────────────────────────────
 //
@@ -923,8 +925,6 @@ export default function App() {
       setScreen("profile");
       return;
     }
-    // A handle with no profile behind it is not a navigable link.
-    if (!creatorByUsername(username)) return;
     setProfileStack((stack) => (stack[stack.length - 1] === username ? stack : [...stack, username]));
   }, [viewerUsername]);
 
@@ -1107,6 +1107,7 @@ export default function App() {
       {/* Everything below can read the signed-in identity — that is how one
           avatar change reaches the profile, the feed, comments and messages. */}
       <SessionProvider account={account} onAccountChange={setAccount}>
+        <Suspense fallback={<div className="absolute inset-0 flex items-center justify-center bg-black text-white">Loading…</div>}>
       <div
         className={`h-[100dvh] w-full overflow-hidden${isDark ? " dark" : ""}`}
         style={{ background: isDark ? "#000" : "#f2f5fb", fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif" }}
@@ -1628,6 +1629,7 @@ export default function App() {
           </AnimatePresence>
         </div>
       </div>
+      </Suspense>
       </SessionProvider>
     </ThemeContext.Provider>
   );

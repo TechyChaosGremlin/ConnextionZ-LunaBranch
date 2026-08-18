@@ -38,10 +38,10 @@ export async function fetchFeedPage(cursor: string | null): Promise<Result<FeedP
     ok: true,
     value: {
       items: page.items.map((post): FeedVideo => {
-        registerCreator(post.creator);
+        const creator = registerCreator(post.creator);
         return {
           id: post.id,
-          creatorId: post.creator.id,
+          creatorId: creator.id,
           thumbnail: post.thumbnail,
           caption: post.caption,
           views: post.views,

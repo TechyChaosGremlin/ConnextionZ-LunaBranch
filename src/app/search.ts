@@ -18,9 +18,10 @@
 // changes here. Recent queries stay client-side either way.
 
 import { type Result } from "./auth-store";
-import { CREATORS, FEED, type Creator, type FeedVideo, creatorById } from "./creators";
+import { CREATORS, FEED, registerCreator, type Creator, type FeedVideo, creatorById } from "./creators";
 import { SOUNDS, type Sound } from "./TrendingSounds";
 import { ownFeedVideos } from "./posts-store";
+import { searchHashtags, searchPosts, searchProfiles } from "./profile-graphql";
 
 const RECENTS_KEY = "connextionz.recentSearches";
 const MAX_RECENTS = 8;
@@ -89,11 +90,11 @@ export const suggestedCreators = (limit = 6): Creator[] =>
 /** Posts the viewer published are searchable too — they are in the same feed. */
 const searchableVideos = (): FeedVideo[] => [...ownFeedVideos(), ...FEED];
 
-function run(query: string): SearchResults {
+function run(query: string, remoteCreators?: Creator[]): SearchResults {
   const words = terms(query);
   if (!words.length) return EMPTY_RESULTS;
 
-  const creators = CREATORS.filter((c) =>
+  const creators = (remoteCreators ?? CREATORS).filter((c) =>
     matches(`${c.username} ${c.displayName} ${c.bio} ${c.location} ${c.collabStatus}`, words),
   ).sort((a, b) => {
     // An exact handle beats a bio mention, however popular the bio's owner is.
@@ -126,7 +127,32 @@ export async function search(query: string): Promise<Result<SearchResults>> {
     return { ok: false, error: "You're offline. Reconnect to search creators and posts." };
   }
   if (!normalise(query)) return { ok: true, value: EMPTY_RESULTS };
-  return { ok: true, value: run(query) };
+  const remoteProfiles = await searchProfiles(query);
+  const remoteCreators = remoteProfiles?.map(registerCreator);
+  const remotePosts = await searchPosts(query);
+  const remoteHashtags = await searchHashtags(query);
+  const results = run(query, remoteCreators);
+  if (remotePosts) {
+    results.videos = remotePosts.map((post): FeedVideo => {
+      const creator = registerCreator(post.creator);
+      return {
+        id: post.id,
+        creatorId: creator.id,
+        thumbnail: post.thumbnail,
+        caption: post.caption,
+        views: post.views,
+        likes: post.likes,
+        comments: post.comments ?? 0,
+        shares: post.shares ?? 0,
+        saves: post.saves ?? 0,
+        hashtags: post.hashtags ?? [],
+        audio: post.audio ?? "Original Sound",
+        ...(post.collabWith ? { collabWith: post.collabWith } : {}),
+      };
+    });
+  }
+  if (remoteHashtags) results.hashtags = remoteHashtags;
+  return { ok: true, value: results };
 }
 
 // ─── RECENT QUERIES ──────────────────────────────────────────────────────────

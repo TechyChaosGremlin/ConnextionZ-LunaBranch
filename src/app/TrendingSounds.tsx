@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTheme } from "./ThemeContext";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -7,6 +7,7 @@ import {
   X, Heart, MessageCircle, Navigation, Check, Send,
   Users, Copy,
 } from "lucide-react";
+import { fetchTrendingSounds } from "./profile-graphql";
 
 // ─── DATA ─────────────────────────────────────────────────────────────────────
 
@@ -664,11 +665,25 @@ export function TrendingSounds({
   const isDark = useTheme();
   const [activeGenre, setActiveGenre] = useState("All");
   const [savedSounds, setSavedSounds] = useState<Record<string, boolean>>({});
+  const [remoteSounds, setRemoteSounds] = useState<Sound[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    fetchTrendingSounds().then((sounds) => {
+      if (active && sounds?.length) setRemoteSounds(sounds);
+    });
+    return () => { active = false; };
+  }, []);
+  const sounds = remoteSounds ?? SOUNDS;
   const [selectedSound, setSelectedSound] = useState<Sound | null>(
-    () => SOUNDS.find((s) => s.id === initialSoundId) ?? null,
+    () => sounds.find((s) => s.id === initialSoundId) ?? null,
   );
+  useEffect(() => {
+    if (initialSoundId && !selectedSound) {
+      setSelectedSound(sounds.find((s) => s.id === initialSoundId) ?? null);
+    }
+  }, [initialSoundId, selectedSound, sounds]);
 
-  const filtered = activeGenre === "All" ? SOUNDS : SOUNDS.filter((s) => s.genre === activeGenre);
+  const filtered = activeGenre === "All" ? sounds : sounds.filter((s) => s.genre === activeGenre);
 
   const toggleSave = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();

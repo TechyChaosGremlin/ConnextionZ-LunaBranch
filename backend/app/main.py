@@ -9,13 +9,14 @@ from pathlib import Path
 from typing import Optional
 
 import strawberry
+from graphql import GraphQLError
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from sqlalchemy import select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from strawberry.fastapi import GraphQLRouter
 from strawberry.types import Info
@@ -26,7 +27,7 @@ from slowapi.util import get_remote_address
 
 from backend.app.auth import authenticate_user, register_user, get_user_profile, AuthContext
 from backend.app.database import get_session
-from backend.app.models import Follow, Playlist as DbPlaylist, Post as DbPost, Profile as DbProfile, User
+from backend.app.models import Follow, Playlist as DbPlaylist, Post as DbPost, Profile as DbProfile, Sound as DbSound, User
 from backend.app.seed import seed_database
 from backend.app.storage import MediaStorage
 
@@ -43,6 +44,10 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("connextionz.api")
+
+
+def api_error(message: str, code: str, status_code: int) -> GraphQLError:
+    return GraphQLError(message, extensions={"code": code, "statusCode": status_code})
 
 seed_database()
 
@@ -84,6 +89,11 @@ class ProfileSummary:
     avatar_url: str = strawberry.field(name="avatarUrl")
     avatar_color: str = strawberry.field(name="avatarColor")
     verified: bool = False
+    collab_score: float = strawberry.field(name="collabScore", default=0.0)
+    collab_count: int = strawberry.field(name="collabCount", default=0)
+    followers: int = 0
+    following: int = 0
+    open_to_collab: bool = strawberry.field(name="openToCollab", default=True)
 
 
 @strawberry.type
@@ -118,6 +128,45 @@ class FeedItem:
 class FeedPage:
     items: list[FeedItem]
     next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
+
+
+@strawberry.type
+class ProfilePage:
+    profiles: list[ProfileSummary]
+    next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
+
+
+@strawberry.type
+class HashtagResult:
+    tag: str
+    posts: int
+    views: int
+
+
+@strawberry.type
+class SoundResult:
+    id: str
+    title: str
+    creator: str
+    creator_avatar: str = strawberry.field(name="creatorAvatar")
+    artwork: str
+    genre: str
+    video_count: int = strawberry.field(name="videoCount")
+    total_plays: int = strawberry.field(name="totalPlays")
+    rank: int
+    growth_pct: int = strawberry.field(name="growthPct")
+    duration: str
+    bpm: int
+
+
+def sound_to_graphql(sound: DbSound) -> SoundResult:
+    return SoundResult(
+        id=sound.id, title=sound.title, creator=sound.creator,
+        creator_avatar=sound.creator_avatar, artwork=sound.artwork,
+        genre=sound.genre, video_count=sound.video_count,
+        total_plays=sound.total_plays, rank=sound.rank,
+        growth_pct=sound.growth_pct, duration=sound.duration, bpm=sound.bpm,
+    )
 
 
 @strawberry.input
@@ -183,6 +232,7 @@ class Profile:
     response_time: str = strawberry.field(name="responseTime")
     posts: list[ContentItem]
     playlists: list[Playlist]
+    is_following: bool = strawberry.field(name="isFollowing", default=False)
 
 
 @strawberry.input
@@ -211,7 +261,7 @@ def post_to_graphql(post: DbPost) -> ContentItem:
     )
 
 
-def profile_to_graphql(profile: DbProfile) -> Profile:
+def profile_to_graphql(profile: DbProfile, is_following: bool = False) -> Profile:
     posts = [post_to_graphql(post) for post in profile.posts]
     playlists = [
         Playlist(
@@ -244,6 +294,7 @@ def profile_to_graphql(profile: DbProfile) -> Profile:
         response_time=profile.response_time,
         posts=posts,
         playlists=playlists,
+        is_following=is_following,
     )
 
 
@@ -262,12 +313,12 @@ def load_profile_from_db(username: str | None = None) -> DbProfile | None:
 def owner_profile(session, info: Info) -> DbProfile:
     user_id = info.context.get("user_id")
     if user_id is None:
-        raise ValueError("Must be logged in")
+        raise api_error("Must be logged in", "UNAUTHENTICATED", 401)
     profile = session.execute(
         select(DbProfile).where(DbProfile.user_id == user_id)
     ).scalar_one_or_none()
     if profile is None:
-        raise ValueError("Profile not found")
+        raise api_error("Profile not found", "NOT_FOUND", 404)
     return profile
 
 
@@ -276,6 +327,9 @@ def profile_summary(profile: DbProfile) -> ProfileSummary:
         id=str(profile.id), username=profile.username,
         display_name=profile.display_name, avatar_url=profile.avatar_url or "",
         avatar_color=profile.avatar_color or "#00AEEF", verified=profile.verified,
+        collab_score=profile.collab_score, collab_count=profile.collab_count,
+        followers=profile.followers, following=profile.following,
+        open_to_collab=profile.open_to_collab,
     )
 
 
@@ -316,7 +370,7 @@ class Query:
         return profile_to_graphql(profile)
 
     @strawberry.field
-    def profile(self, username: str) -> Profile | None:
+    def profile(self, username: str, info: Info) -> Profile | None:
         """Fetch any user's public profile by username."""
         with get_session() as session:
             profile = session.execute(
@@ -324,7 +378,109 @@ class Query:
             ).scalar_one_or_none()
             if profile is None:
                 return None
-            return profile_to_graphql(profile)
+            user_id = info.context.get("user_id")
+            is_following = False
+            if user_id is not None and user_id != profile.user_id:
+                is_following = session.execute(
+                    select(Follow.id).where(
+                        Follow.follower_id == user_id,
+                        Follow.following_id == profile.user_id,
+                    )
+                ).first() is not None
+            return profile_to_graphql(profile, is_following=is_following)
+
+    @strawberry.field(name="searchProfiles")
+    def search_profiles(self, query: str, limit: int = 20) -> list[ProfileSummary]:
+        """Search public profiles by username or display name."""
+        terms = [term for term in query.strip().split() if term]
+        if not terms:
+            return []
+        search = "%" + "%".join(terms) + "%"
+        page_size = max(1, min(limit, 50))
+        with get_session() as session:
+            profiles = session.execute(
+                select(DbProfile)
+                .where(or_(
+                    func.lower(DbProfile.username).like(search.lower()),
+                    func.lower(DbProfile.display_name).like(search.lower()),
+                ))
+                .order_by(DbProfile.followers.desc(), DbProfile.username)
+                .limit(page_size)
+            ).scalars().all()
+            return [profile_summary(profile) for profile in profiles]
+
+    @strawberry.field(name="suggestedProfiles")
+    def suggested_profiles(self, limit: int = 6) -> list[ProfileSummary]:
+        """Return public profiles ranked for collaboration discovery."""
+        page_size = max(1, min(limit, 20))
+        with get_session() as session:
+            profiles = session.execute(
+                select(DbProfile)
+                .where(DbProfile.open_to_collab.is_(True))
+                .order_by(DbProfile.collab_score.desc(), DbProfile.followers.desc())
+                .limit(page_size)
+            ).scalars().all()
+            return [profile_summary(profile) for profile in profiles]
+
+    @strawberry.field(name="searchPosts")
+    def search_posts(self, query: str, limit: int = 20) -> list[FeedItem]:
+        """Search published posts by caption, hashtag, audio, or creator."""
+        terms = [term for term in query.strip().split() if term]
+        if not terms:
+            return []
+        page_size = max(1, min(limit, 50))
+        with get_session() as session:
+            filters = []
+            for term in terms:
+                pattern = f"%{term}%"
+                filters.append(or_(
+                    DbPost.caption.ilike(pattern),
+                    DbPost.audio.ilike(pattern),
+                    cast(DbPost.hashtags, String).ilike(pattern),
+                    DbProfile.username.ilike(pattern),
+                    DbProfile.display_name.ilike(pattern),
+                ))
+            rows = session.execute(
+                select(DbPost, DbProfile)
+                .join(DbProfile, DbPost.profile_id == DbProfile.id)
+                .where(*filters)
+                .order_by(DbPost.views.desc(), DbPost.id.desc())
+                .limit(page_size)
+            ).all()
+            return [feed_item(post, profile) for post, profile in rows]
+
+    @strawberry.field(name="searchHashtags")
+    def search_hashtags(self, query: str, limit: int = 20) -> list[HashtagResult]:
+        """Search hashtags stored on published posts."""
+        term = query.strip().lstrip("#").lower()
+        if not term:
+            return []
+        page_size = max(1, min(limit, 50))
+        counts: dict[str, tuple[int, int]] = {}
+        with get_session() as session:
+            posts = session.execute(select(DbPost.hashtags, DbPost.views)).all()
+        for hashtags, views in posts:
+            for value in hashtags or []:
+                tag = str(value).strip().lstrip("#").lower()
+                if tag and term in tag:
+                    post_count, view_count = counts.get(tag, (0, 0))
+                    counts[tag] = (post_count + 1, view_count + (views or 0))
+        return [
+            HashtagResult(tag=tag, posts=post_count, views=view_count)
+            for tag, (post_count, view_count) in sorted(
+                counts.items(), key=lambda item: (-item[1][1], item[0])
+            )[:page_size]
+        ]
+
+    @strawberry.field(name="trendingSounds")
+    def trending_sounds(self, genre: str | None = None, limit: int = 50) -> list[SoundResult]:
+        page_size = max(1, min(limit, 100))
+        with get_session() as session:
+            statement = select(DbSound).order_by(DbSound.rank, DbSound.total_plays.desc())
+            if genre and genre != "All":
+                statement = statement.where(DbSound.genre == genre)
+            sounds = session.execute(statement.limit(page_size)).scalars().all()
+            return [sound_to_graphql(sound) for sound in sounds]
 
     @strawberry.field(name="myPosts")
     def my_posts(self, info: Info) -> list[ContentItem]:
@@ -409,6 +565,42 @@ class Query:
             ).scalars().all()
             return [profile_summary(item) for item in profiles]
 
+    @strawberry.field(name="myFollowersPage")
+    def my_followers_page(self, info: Info, after: str | None = None, limit: int = 20) -> ProfilePage:
+        return Query._follow_page(info.context.get("user_id"), True, after, limit)
+
+    @strawberry.field(name="myFollowingPage")
+    def my_following_page(self, info: Info, after: str | None = None, limit: int = 20) -> ProfilePage:
+        return Query._follow_page(info.context.get("user_id"), False, after, limit)
+
+    @staticmethod
+    def _follow_page(
+        user_id: int | None, incoming: bool, after: str | None, limit: int,
+    ) -> ProfilePage:
+        if user_id is None:
+            return ProfilePage(profiles=[], next_cursor=None)
+        page_size = max(1, min(limit, 100))
+        try:
+            offset = max(0, int(after or "0"))
+        except ValueError as error:
+            raise api_error("Invalid follow cursor", "VALIDATION_ERROR", 400) from error
+        with get_session() as session:
+            join_column = Follow.follower_id if incoming else Follow.following_id
+            owner_column = Follow.following_id if incoming else Follow.follower_id
+            rows = session.execute(
+                select(DbProfile)
+                .join(Follow, join_column == DbProfile.user_id)
+                .where(owner_column == user_id)
+                .order_by(Follow.id)
+                .offset(offset)
+                .limit(page_size + 1)
+            ).scalars().all()
+            has_more = len(rows) > page_size
+            return ProfilePage(
+                profiles=[profile_summary(profile) for profile in rows[:page_size]],
+                next_cursor=str(offset + page_size) if has_more else None,
+            )
+
     @strawberry.field
     def feed(self, cursor: str | None = None, limit: int = 10) -> FeedPage:
         page_size = max(1, min(limit, 50))
@@ -417,7 +609,7 @@ class Query:
             try:
                 offset = max(0, int(cursor))
             except ValueError:
-                raise ValueError("Invalid feed cursor")
+                raise api_error("Invalid feed cursor", "VALIDATION_ERROR", 400)
 
         with get_session() as session:
             rows = session.execute(
@@ -442,19 +634,19 @@ class Mutation:
         """Update the logged-in user's profile. Only the owner can edit."""
         user_id = info.context.get("user_id")
         if user_id is None:
-            raise ValueError("Must be logged in to update profile")
+            raise api_error("Must be logged in to update profile", "UNAUTHENTICATED", 401)
 
         with get_session() as session:
             profile = session.execute(
                 select(DbProfile).where(DbProfile.user_id == user_id)
             ).scalar_one_or_none()
             if profile is None:
-                raise ValueError("Profile not found")
+                raise api_error("Profile not found", "NOT_FOUND", 404)
 
             if input.username is not None:
                 username = input.username.strip().removeprefix("@").lower()
                 if not re.fullmatch(r"[a-z0-9._]{3,24}", username):
-                    raise ValueError("Usernames are 3-24 characters: letters, numbers, dots and underscores.")
+                    raise api_error("Usernames are 3-24 characters: letters, numbers, dots and underscores.", "VALIDATION_ERROR", 400)
                 taken = session.execute(
                     select(DbProfile).where(
                         DbProfile.username == username,
@@ -462,7 +654,7 @@ class Mutation:
                     )
                 ).scalar_one_or_none()
                 if taken is not None:
-                    raise ValueError("That username is already taken.")
+                    raise api_error("That username is already taken.", "CONFLICT", 409)
                 profile.username = username
             if input.display_name is not None:
                 profile.display_name = input.display_name
@@ -491,9 +683,9 @@ class Mutation:
             follower = owner_profile(session, info)
             target = find_profile(session, username)
             if target is None:
-                raise ValueError("Profile not found")
+                raise api_error("Profile not found", "NOT_FOUND", 404)
             if target.user_id == follower.user_id:
-                raise ValueError("You cannot follow yourself")
+                raise api_error("You cannot follow yourself", "VALIDATION_ERROR", 400)
 
             existing = session.execute(
                 select(Follow).where(
@@ -512,7 +704,7 @@ class Mutation:
                     session.commit()
                 except IntegrityError:
                     session.rollback()
-                    raise ValueError("That follow already exists")
+                    raise api_error("That follow already exists", "CONFLICT", 409)
             return FollowResult(
                 following=True, followers=target.followers,
                 following_count=follower.following,
@@ -524,7 +716,7 @@ class Mutation:
             follower = owner_profile(session, info)
             target = find_profile(session, username)
             if target is None:
-                raise ValueError("Profile not found")
+                raise api_error("Profile not found", "NOT_FOUND", 404)
 
             existing = session.execute(
                 select(Follow).where(
@@ -572,7 +764,7 @@ class Mutation:
                 select(DbPost).where(DbPost.id == int(id), DbPost.profile_id == profile.id)
             ).scalar_one_or_none()
             if post is None:
-                raise ValueError("Post not found")
+                raise api_error("Post not found", "NOT_FOUND", 404)
             if input.thumbnail is not None:
                 post.thumbnail = input.thumbnail
             if input.media_url is not None:
@@ -636,7 +828,7 @@ class Mutation:
                 )
             ).scalar_one_or_none()
             if playlist is None:
-                raise ValueError("Playlist not found")
+                raise api_error("Playlist not found", "NOT_FOUND", 404)
             if input.title is not None:
                 playlist.title = input.title
             if input.cover is not None:
@@ -678,7 +870,12 @@ def get_context_for_request(request: Request):
 graphql_app = GraphQLRouter(schema, context_getter=get_context_for_request)
 app = FastAPI(title="ConnextionZ Profile API")
 
-limiter = Limiter(key_func=get_remote_address, default_limits=["120/minute"])
+rate_limit_enabled = os.getenv("RATE_LIMIT_ENABLED", "true").lower() not in {"0", "false", "no"}
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["120/minute"],
+    enabled=rate_limit_enabled,
+)
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 

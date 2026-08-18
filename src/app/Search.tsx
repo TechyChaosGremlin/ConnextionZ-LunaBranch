@@ -29,6 +29,8 @@ import {
   suggestedCreators, totalResults, trendingHashtags,
 } from "./search";
 import { type Sound } from "./TrendingSounds";
+import { fetchSuggestedProfiles } from "./profile-graphql";
+import { registerCreator } from "./creators";
 
 type Status = "idle" | "loading" | "ready" | "error";
 type Tab = "top" | "creators" | "videos" | "sounds" | "tags";
@@ -251,7 +253,15 @@ function DiscoverPanel({
   onOpenProfile?: (username: string) => void;
   onOpenSounds?: (soundId?: string) => void;
 }) {
-  const suggestions = useMemo(() => suggestedCreators(6), []);
+  const [remoteSuggestions, setRemoteSuggestions] = useState<Creator[] | null>(null);
+  useEffect(() => {
+    let active = true;
+    fetchSuggestedProfiles(6).then((profiles) => {
+      if (active && profiles) setRemoteSuggestions(profiles.map(registerCreator));
+    });
+    return () => { active = false; };
+  }, []);
+  const suggestions = remoteSuggestions ?? suggestedCreators(6);
   const tags = useMemo(() => trendingHashtags(), []);
 
   return (

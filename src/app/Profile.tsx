@@ -23,11 +23,9 @@ import {
 } from "lucide-react";
 import { useTheme } from "./ThemeContext";
 import { ACCENT, useTokens, EmptyState } from "./settings-ui";
-import { registerCreator, type Creator, OWN_PLAYLISTS, OWN_STATS, creatorById } from "./creators";
+import { registerCreator, type Creator, OWN_PLAYLISTS, OWN_STATS } from "./creators";
 import { useOwnContent } from "./posts-store";
-import {
-  followingIds, ownFollowerCreators, useFollowerCount, useFollowingCount, useFollowingCreators,
-} from "./follow-store";
+import { useFollowingCount } from "./follow-store";
 import { useSession, useViewer } from "./session";
 import { updateAvatar } from "./auth-store";
 import {
@@ -157,8 +155,7 @@ export function ProfileScreen({
 
   // Own follower count is not affected by the viewer's own follow graph, so the
   // hook is only meaningful for other people's profiles.
-  const followers = useFollowerCount(creator);
-  const followerCount = isOwner ? creator.followers : followers;
+  const followerCount = creator.followers;
 
   const collabPosts = useMemo(() => creator.posts.filter((p) => p.collabWith), [creator.posts]);
 
@@ -379,6 +376,7 @@ export function ProfileScreen({
       <AnimatePresence>
         {connections && (
           <ConnectionsSheet key="connections" initialTab={connections}
+            followerCount={followerCount} followingCount={creator.following}
             onClose={() => setConnections(null)} onOpenProfile={onOpenProfile} />
         )}
       </AnimatePresence>
@@ -395,9 +393,11 @@ export function ProfileScreen({
  * from under the finger that pressed it.
  */
 function ConnectionsSheet({
-  initialTab, onClose, onOpenProfile,
+  initialTab, followerCount, followingCount, onClose, onOpenProfile,
 }: {
   initialTab: "followers" | "following";
+  followerCount: number;
+  followingCount: number;
   onClose: () => void;
   onOpenProfile?: (username: string) => void;
 }) {
@@ -405,8 +405,6 @@ function ConnectionsSheet({
   const t = useTokens(isDark);
   const [tab, setTab] = useState(initialTab);
 
-  const followingCount = useFollowingCount();
-  const liveFollowing = useFollowingCreators();
   const [remoteFollowing, setRemoteFollowing] = useState<Creator[] | null>(null);
   const [remoteFollowers, setRemoteFollowers] = useState<Creator[] | null>(null);
 
@@ -419,20 +417,8 @@ function ConnectionsSheet({
     });
     return () => { active = false; };
   }, []);
-  // Snapshot on open — see the note above. `liveFollowing` is still what seeds
-  // it, so a creator followed after opening the sheet is picked up on reopen.
-  const [snapshotIds] = useState<string[]>(() => followingIds());
-  const localFollowingRows = useMemo(() => {
-    const seen = new Set<string>();
-    const rows = [...snapshotIds, ...liveFollowing.map((c) => c.id)]
-      .filter((id) => (seen.has(id) ? false : (seen.add(id), true)))
-      .map(creatorById)
-      .filter((c): c is Creator => !!c);
-    return rows;
-  }, [snapshotIds, liveFollowing]);
-
-  const followerRows = remoteFollowers ?? ownFollowerCreators();
-  const followingRows = remoteFollowing ?? localFollowingRows;
+  const followerRows = remoteFollowers ?? [];
+  const followingRows = remoteFollowing ?? [];
   const rows = tab === "following" ? followingRows : followerRows;
 
   return (
@@ -463,7 +449,7 @@ function ConnectionsSheet({
           active={tab}
           onChange={setTab}
           tabs={[
-            { id: "followers", label: "Followers", count: OWN_STATS.followers },
+            { id: "followers", label: "Followers", count: followerCount },
             { id: "following", label: "Following", count: followingCount },
           ]}
         />

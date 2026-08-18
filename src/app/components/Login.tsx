@@ -31,12 +31,12 @@ export default function Login({
   const [providerSheet, setProviderSheet] = useState<Provider | null>(null);
   const [providerBusy, setProviderBusy] = useState<Provider | null>(null);
 
-  const valid = isValidEmail(email) && password.length >= 6;
+  const valid = isValidEmail(email) && password.length > 0;
 
   const handleLogin = async () => {
     const errs: typeof errors = {};
     if (!isValidEmail(email)) errs.email = "Enter a valid email address";
-    if (password.length < 6) errs.password = "Password must be at least 6 characters";
+    if (!password) errs.password = "Enter your password";
     if (Object.keys(errs).length) { setErrors(errs); return; }
 
     setLoading(true);

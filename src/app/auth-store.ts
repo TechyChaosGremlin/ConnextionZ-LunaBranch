@@ -100,7 +100,7 @@ export const DEMO_ACCOUNT: Account = {
   firstName: "Maya",
   lastName: "Chen",
   email: "demo@connextionz.app",
-  password: "collab2026",
+  password: "demo",
   providers: [],
   profile: {
     username: "maya.creates",

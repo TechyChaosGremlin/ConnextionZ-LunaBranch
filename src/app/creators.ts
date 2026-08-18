@@ -341,11 +341,22 @@ export function registerCreator(input: {
   avatarUrl?: string | null;
   avatarColor?: string | null;
   verified?: boolean | null;
+  collabScore?: number | null;
+  collabCount?: number | null;
+  followers?: number | null;
+  following?: number | null;
+  openToCollab?: boolean | null;
 }): Creator {
-  const existing = BY_ID.get(input.id);
-  if (existing) return existing;
+  const username = input.username.trim().replace(/^@/, "").toLowerCase();
+  const existingByUsername = BY_USERNAME.get(username);
+  if (existingByUsername) return existingByUsername;
+
+  const existingById = BY_ID.get(input.id);
+  const id = existingById && existingById.username !== username
+    ? `api:${input.id}:${username}`
+    : input.id;
   const creator: Creator = {
-    id: input.id,
+    id,
     username: input.username,
     displayName: input.displayName || input.username,
     avatarUrl: input.avatarUrl ?? "",
@@ -356,18 +367,18 @@ export function registerCreator(input: {
     verified: !!input.verified,
     online: true,
     collabStatus: "Open to Collaboration",
-    collabScore: 0,
-    collabCount: 0,
-    followers: 0,
-    following: 0,
-    openToCollab: true,
+    collabScore: input.collabScore ?? 0,
+    collabCount: input.collabCount ?? 0,
+    followers: input.followers ?? 0,
+    following: input.following ?? 0,
+    openToCollab: input.openToCollab ?? true,
     responseTime: "< 4 hours",
     posts: [],
     playlists: [],
   };
   CREATORS.push(creator);
   BY_ID.set(creator.id, creator);
-  BY_USERNAME.set(creator.username.toLowerCase(), creator);
+  BY_USERNAME.set(username, creator);
   return creator;
 }
 
