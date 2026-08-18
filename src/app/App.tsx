@@ -8,12 +8,10 @@ import { InboxScreen } from "./Inbox";
 import { YouTubePlayer } from "./components/YouTubePlayer";
 import { ThemeContext, useTheme } from "./ThemeContext";
 import { motion, AnimatePresence } from "motion/react";
-// import { MetaverseHub } from "./Metaverse";
-// import { HoloProfile } from "./HoloProfile";
 import {
   Heart, MessageCircle, Bookmark, Music,
   Home, Search, Plus, Mail, User, X, Send, Check,
-  ChevronUp, ChevronDown, Navigation, Globe,
+  ChevronUp, ChevronDown, Navigation,
 } from "lucide-react";
 
 // ─── DATA ────────────────────────────────────────────────────────────────────
@@ -128,7 +126,7 @@ const SEED_COMMENTS: Record<string, Comment[]> = {
   ],
 };
 
-/** Creators the signed-in user already follows when the app opens. */
+/** Creators the signed-in user follows — what the Following tab narrows to. */
 const FOLLOWING_IDS = ["1", "3", "5"];
 
 const fmt = (n: number) =>
@@ -444,113 +442,21 @@ function ShareSheet({ video, onClose }: { video: typeof VIDEOS[0]; onClose: () =
   );
 }
 
-// ─── FOLLOW BUTTON ────────────────────────────────────────────────────────────
-
-/**
- * The avatar badge in the action rail. One tap toggles the follow and the badge
- * answers on the spot: the `+` flips to a check, the fill drops from brand blue
- * to neutral glass, a ring pulses out of it and a "Following" chip slides in —
- * so the state change is confirmed before the caller's state even matters.
- */
-function FollowButton({
-  username, avatarUrl, following, onToggle,
-}: {
-  username: string; avatarUrl: string; following: boolean; onToggle: () => void;
-}) {
-  // Bumped on each *follow* tap; drives the one-shot ring + chip, then resets.
-  // A counter rather than a boolean so re-following replays the burst cleanly.
-  const [burst, setBurst] = useState(0);
-
-  useEffect(() => {
-    if (!burst) return;
-    const t = setTimeout(() => setBurst(0), 1500);
-    return () => clearTimeout(t);
-  }, [burst]);
-
-  const handleClick = (e: React.MouseEvent) => {
-    // The slide behind the rail toggles play/pause on click — don't pause too.
-    e.stopPropagation();
-    setBurst((b) => (following ? 0 : b + 1));
-    onToggle();
-  };
-
-  return (
-    <div className="relative mb-1">
-      <img src={avatarUrl} alt={username}
-        className="w-11 h-11 rounded-full object-cover border-2 transition-colors"
-        style={{ borderColor: following ? "#00AEEF" : "#fff" }} />
-
-      {/* Badge anchor — the offset lives here so motion's transforms stay free. */}
-      <div className="absolute -bottom-2 left-1/2 -translate-x-1/2">
-        {/* Shockwave confirming the tap */}
-        <AnimatePresence>
-          {burst > 0 && (
-            <motion.span key={`ring-${burst}`} initial={{ scale: 0.5, opacity: 0.9 }} animate={{ scale: 2.8, opacity: 0 }}
-              exit={{ opacity: 0 }} transition={{ duration: 0.5, ease: "easeOut" }}
-              className="absolute inset-0 rounded-full pointer-events-none"
-              style={{ border: "2px solid #00AEEF" }} />
-          )}
-        </AnimatePresence>
-
-        <motion.button type="button" onClick={handleClick}
-          aria-pressed={following}
-          aria-label={following ? `Unfollow ${username}` : `Follow ${username}`}
-          title={following ? "Following" : "Follow"}
-          whileHover={{ scale: 1.18 }} whileTap={{ scale: 0.8 }}
-          transition={{ type: "spring", stiffness: 520, damping: 22 }}
-          className="relative w-5 h-5 rounded-full flex items-center justify-center cursor-pointer"
-          style={{
-            background: following ? "rgba(255,255,255,0.18)" : "#00AEEF",
-            border: following ? "1px solid rgba(255,255,255,0.6)" : "none",
-            backdropFilter: following ? "blur(8px)" : "none",
-            boxShadow: following ? "none" : "0 2px 8px rgba(0,174,239,0.5)",
-            transitionProperty: "background, box-shadow, border-color",
-            transitionDuration: "0.2s",
-          }}>
-          {/* Icons swap simultaneously (no `mode="wait"`) so the glyph turns over
-              on the same frame as the tap rather than a beat behind it. */}
-          <AnimatePresence initial={false}>
-            <motion.span key={following ? "check" : "plus"}
-              initial={{ scale: 0, rotate: following ? -120 : 120, opacity: 0 }}
-              animate={{ scale: 1, rotate: 0, opacity: 1 }}
-              exit={{ scale: 0, opacity: 0 }}
-              transition={{ duration: 0.2, ease: [0.17, 0.89, 0.32, 1.28] }}
-              className="absolute inset-0 flex items-center justify-center">
-              {following
-                ? <Check className="w-3 h-3 text-white" strokeWidth={3.5} />
-                : <Plus className="w-3 h-3 text-white" strokeWidth={3.5} />}
-            </motion.span>
-          </AnimatePresence>
-        </motion.button>
-
-        {/* Word-level confirmation, left of the rail so it can't clip off-screen */}
-        <AnimatePresence>
-          {burst > 0 && following && (
-            <motion.span key="chip" initial={{ opacity: 0, x: 10, scale: 0.85 }} animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, x: 10, scale: 0.85 }} transition={{ type: "spring", stiffness: 420, damping: 26 }}
-              className="absolute whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-bold text-white pointer-events-none"
-              style={{ right: "calc(100% + 8px)", top: 0, background: "#00AEEF", boxShadow: "0 2px 10px rgba(0,174,239,0.5)" }}>
-              Following
-            </motion.span>
-          )}
-        </AnimatePresence>
-      </div>
-    </div>
-  );
-}
-
 // ─── ACTION RAIL ──────────────────────────────────────────────────────────────
 
 function ActionRail({
-  video, liked, saved, following, onFollow, onLike, onSave, onCollab, onComment, onShare,
+  video, liked, saved, onLike, onSave, onCollab, onComment, onShare,
 }: {
-  video: typeof VIDEOS[0]; liked: boolean; saved: boolean; following: boolean;
-  onFollow: () => void;
+  video: typeof VIDEOS[0]; liked: boolean; saved: boolean;
   onLike: () => void; onSave: () => void; onCollab: () => void; onComment: () => void; onShare: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center gap-5 absolute right-3 bottom-28 z-10">
-      <FollowButton username={video.username} avatarUrl={video.avatarUrl} following={following} onToggle={onFollow} />
+    <div className="flex flex-col items-center gap-5 absolute right-3 top-1/2 -translate-y-1/2 z-10">
+      <div className="relative mb-1">
+        <img src={video.avatarUrl} alt={video.username} className="w-11 h-11 rounded-full object-cover border-2 border-white" />
+        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full flex items-center justify-center text-white text-xs font-bold"
+          style={{ background: "#00AEEF", boxShadow: "0 2px 8px rgba(0,174,239,0.5)" }}>+</div>
+      </div>
       <motion.button whileTap={{ scale: 0.85 }} onClick={onLike} className="flex flex-col items-center gap-1">
         <motion.div animate={liked ? { scale: [1, 1.35, 1] } : {}} transition={{ duration: 0.25 }}>
           <Heart className={`w-7 h-7 drop-shadow-lg ${liked ? "fill-red-500 text-red-500" : "text-white"}`} />
@@ -790,7 +696,7 @@ export default function App() {
   // The signed-in account, restored from the persisted session on load.
   const [account, setAccount] = useState<Account | null>(() => getSession());
   const [isDark, setIsDark] = useState(true);
-  const [screen, setScreen] = useState<"feed" | "discover" | "profile" | "inbox" | "holoprofile" | "metaverse">("feed");
+  const [screen, setScreen] = useState<"feed" | "discover" | "profile" | "inbox">("feed");
   const [feedTab, setFeedTab] = useState<"forYou" | "following">("forYou");
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [liveMode, setLiveMode] = useState<"off" | "setup" | "creator" | "viewer">("off");
@@ -799,9 +705,6 @@ export default function App() {
   const [dir, setDir] = useState(1);
   const [liked, setLiked] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
-  const [following, setFollowing] = useState<Record<string, boolean>>(
-    () => Object.fromEntries(FOLLOWING_IDS.map((id) => [id, true]))
-  );
   const [collabTarget, setCollabTarget] = useState<typeof VIDEOS[0] | null>(null);
   const [commentTarget, setCommentTarget] = useState<typeof VIDEOS[0] | null>(null);
   const [shareTarget, setShareTarget] = useState<typeof VIDEOS[0] | null>(null);
@@ -813,18 +716,8 @@ export default function App() {
 
   // The two top-bar tabs are the same feed filtered, so switching them restarts
   // at the first video rather than leaving `idx` past the end of a shorter list.
-  // Following reads live follow state, so a tap on the rail badge re-filters it.
-  const feed = feedTab === "following" ? VIDEOS.filter((v) => following[v.id]) : VIDEOS;
-  const video = feed.length > 0 ? feed[Math.min(idx, feed.length - 1)] : undefined;
-
-  // Unfollowing from the Following tab can shrink the feed out from under `idx`.
-  useEffect(() => {
-    if (feed.length > 0 && idx > feed.length - 1) setIdx(feed.length - 1);
-  }, [feed.length, idx]);
-
-  const toggleFollow = useCallback((id: string) => {
-    setFollowing((f) => ({ ...f, [id]: !f[id] }));
-  }, []);
+  const feed = feedTab === "following" ? VIDEOS.filter((v) => FOLLOWING_IDS.includes(v.id)) : VIDEOS;
+  const video = feed[Math.min(idx, feed.length - 1)];
 
   const goNext = useCallback(() => { if (idx < feed.length - 1) { setDir(1); setIdx((i) => i + 1); } }, [idx, feed.length]);
   const goPrev = useCallback(() => { if (idx > 0) { setDir(-1); setIdx((i) => i - 1); } }, [idx]);
@@ -885,7 +778,6 @@ export default function App() {
         >
           {/* ── Video slides ── */}
           <AnimatePresence initial={false} custom={dir} mode="wait">
-            {video && (
             <motion.div key={video.id} custom={dir}
               initial={{ y: dir > 0 ? "100%" : "-100%", opacity: 0.4 }}
               animate={{ y: 0, opacity: 1 }}
@@ -955,8 +847,6 @@ export default function App() {
               )}
 
               <ActionRail video={video} liked={!!liked[video.id]} saved={!!saved[video.id]}
-                following={!!following[video.id]}
-                onFollow={() => toggleFollow(video.id)}
                 onLike={() => setLiked((l) => ({ ...l, [video.id]: !l[video.id] }))}
                 onSave={() => setSaved((s) => ({ ...s, [video.id]: !s[video.id] }))}
                 onCollab={() => setCollabTarget(video)}
@@ -975,34 +865,8 @@ export default function App() {
                 ))}
               </div>
             </motion.div>
-            )}
           </AnimatePresence>
-          {/* ── Metaverse portal orb ── */}
-          <AnimatePresence>
-            {screen === "feed" && (
-              <motion.button
-                key="metaverse-orb"
-                initial={{ opacity: 0, scale: 0.6 }}
-                animate={{ opacity: 1, scale: 1 }}
-                exit={{ opacity: 0, scale: 0.6 }}
-                whileHover={{ scale: 1.12 }}
-                whileTap={{ scale: 0.9 }}
-                onClick={() => setScreen("metaverse")}
-                className="absolute z-20 flex flex-col items-center gap-1"
-                style={{ bottom: 88, right: 16 }}
-              >
-                <motion.div
-                  animate={{ boxShadow: ["0 0 14px rgba(124,58,237,0.5)", "0 0 28px rgba(0,174,239,0.7)", "0 0 14px rgba(124,58,237,0.5)"] }}
-                  transition={{ duration: 2.5, repeat: Infinity }}
-                  className="w-12 h-12 rounded-full flex items-center justify-center"
-                  style={{ background: "linear-gradient(135deg,#7c3aed,#00AEEF)" }}
-                >
-                  <Globe className="w-5 h-5 text-white" />
-                </motion.div>
-                <span className="text-[9px] font-bold tracking-wider" style={{ color: "#00AEEF" }}>METAVERSE</span>
-              </motion.button>
-            )}
-          </AnimatePresence>
+
           {/* ── Bottom nav ── */}
           <BottomNav
             active={screen === "discover" ? "search" : screen === "profile" ? "profile" : screen === "inbox" ? "inbox" : "home"}
@@ -1022,10 +886,8 @@ export default function App() {
 
           {/* ── Inbox ── */}
           <AnimatePresence>
-            {/* z-30 clears the feed's top bar, which is a positive-z sibling. */}
             {screen === "inbox" && (
-              <motion.div key="inbox" className="absolute inset-0 z-30"
-                initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
+              <motion.div key="inbox" initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
                 <InboxScreen onBack={() => setScreen("feed")} />
               </motion.div>
             )}
@@ -1034,8 +896,7 @@ export default function App() {
           {/* ── Profile / Settings ── */}
           <AnimatePresence>
             {screen === "profile" && (
-              <motion.div key="settings" className="absolute inset-0 z-30"
-                initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
+              <motion.div key="settings" initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
                 <SettingsScreen
                   account={account}
                   onBack={() => setScreen("feed")}
@@ -1044,33 +905,10 @@ export default function App() {
                   onAccountChange={setAccount}
                   isDark={isDark}
                   onToggleTheme={() => setIsDark((d) => !d)}
-                  onOpenHoloProfile={() => setScreen("holoprofile")}
                 />
               </motion.div>
             )}
           </AnimatePresence>
-
-          {/* ── Holo Profile ── pushed from Settings, so Back returns there */}
-          {/* <AnimatePresence>
-            {screen === "holoprofile" && (
-              <motion.div key="holoprofile" className="absolute inset-0 z-40 overflow-y-auto"
-                initial={{ opacity: 0, scale: 0.96 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 0.96 }}
-                transition={{ duration: 0.3 }}>
-                <HoloProfile onBack={() => setScreen("profile")} />
-              </motion.div>
-            )}
-          </AnimatePresence> */}
-
-          {/* ── Metaverse ── entered from the feed orb */}
-          {/* <AnimatePresence>
-            {screen === "metaverse" && (
-              <motion.div key="metaverse" className="absolute inset-0 z-40"
-                initial={{ opacity: 0, scale: 1.04 }} animate={{ opacity: 1, scale: 1 }} exit={{ opacity: 0, scale: 1.04 }}
-                transition={{ duration: 0.35 }}>
-                <MetaverseHub onBack={() => setScreen("feed")} />
-              </motion.div>
-            )}
-          </AnimatePresence> */}
 
           {/* ── Delete profile modal ── */}
           <AnimatePresence>

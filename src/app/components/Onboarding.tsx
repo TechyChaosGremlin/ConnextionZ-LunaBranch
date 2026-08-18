@@ -1,13 +1,15 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import {
-  User, ArrowRight, ArrowLeft,
-  Check, Zap,
-  Music, Activity, MapPin, Coffee, Pen, Cpu, Gamepad2,
-  Star, TrendingUp, Mic, Users, Briefcase,
+  Activity, ArrowLeft, ArrowRight, 
+  Briefcase, Check, Coffee, 
+  Cpu, Gamepad2, MapPin, 
+  Mic, Music, Pen, 
+  Star, TrendingUp, User, 
+  Users, Zap 
 } from "lucide-react";
 
-import { GUTTER, Input, OnbStep, SCREEN } from "../auth-ui"
+import { GUTTER, Input, OnbStep, SCREEN } from "../Auth"
 import Logo       from "./ui/Logo"
 import PrimaryBtn from "./ui/PrimaryBtn"
 import StepDots   from "./ui/StepDots"
@@ -37,10 +39,10 @@ const RESPONSE_TIMES = ["< 1 hour", "< 4 hours", "< 24 hours"];
 
 /** What onboarding collects. `null` when the user skipped it. */
 export interface OnboardingSetup {
-  categories: string[];
-  collabTypes: string[];
-  avatarColor: string;
-  creatorName: string;
+  categories:   string[];
+  collabTypes:  string[];
+  avatarColor:  string;
+  creatorName:  string;
   openToCollab: boolean;
   responseTime: string;
 }
@@ -54,7 +56,7 @@ export default function Onboarding({ onDone }: { onDone: (setup: OnboardingSetup
   const [openToCollab, setOpenToCollab]       = useState(true);
   const [responseTime, setResponseTime]       = useState("< 4 hours");
 
-  const toggleCat = (l: string) => setSelectedCats((p) => p.includes(l) ? p.filter((x) => x !== l) : [...p, l]);
+  const toggleCat =    (l: string) => setSelectedCats((p)    => p.includes(l) ? p.filter((x) => x !== l) : [...p, l]);
   const toggleCollab = (l: string) => setSelectedCollabs((p) => p.includes(l) ? p.filter((x) => x !== l) : [...p, l]);
 
   const canContinue = step === 1 ? selectedCats.length > 0 : step === 2 ? selectedCollabs.length > 0 : !!creatorName.trim();
@@ -87,7 +89,12 @@ export default function Onboarding({ onDone }: { onDone: (setup: OnboardingSetup
       <div className={`flex-1 overflow-y-auto lg:overflow-visible ${GUTTER}`}>
         <AnimatePresence mode="wait">
           {step === 1 && (
-            <motion.div key="s1" initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -40 }} transition={{ duration: 0.22 }}>
+            <motion.div key="s1" 
+            initial=   {{ opacity: 0, x: 40  }} 
+            animate=   {{ opacity: 1, x: 0   }} 
+            exit=      {{ opacity: 0, x: -40 }} 
+            transition={{ duration: 0.22     }}
+            >
               <h1 className="text-white font-extrabold text-[32px] lg:text-[36px] leading-tight mb-1">What do you create?</h1>
               <p className="text-white/45 text-[14px] mb-6">Select all that apply — your feed is personalized around your picks</p>
               <div className="grid grid-cols-3 gap-3 pb-6">
@@ -114,7 +121,12 @@ export default function Onboarding({ onDone }: { onDone: (setup: OnboardingSetup
           )}
 
           {step === 2 && (
-            <motion.div key="s2" initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -40 }} transition={{ duration: 0.22 }}>
+            <motion.div key="s2" 
+            initial=   {{ opacity: 0, x: 40  }} 
+            animate=   {{ opacity: 1, x: 0   }} 
+            exit=      {{ opacity: 0, x: -40 }} 
+            transition={{ duration: 0.22     }}
+            >
               <h1 className="text-white font-extrabold text-[32px] lg:text-[36px] leading-tight mb-1">How do you collab?</h1>
               <p className="text-white/45 text-[14px] mb-6">Pick the types you're open to — creators will know how to approach you</p>
               <div className="space-y-3 pb-6">
@@ -144,7 +156,12 @@ export default function Onboarding({ onDone }: { onDone: (setup: OnboardingSetup
           )}
 
           {step === 3 && (
-            <motion.div key="s3" initial={{ opacity: 0, x: 40 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -40 }} transition={{ duration: 0.22 }}>
+            <motion.div key="s3" 
+            initial=   {{ opacity: 0, x: 40  }} 
+            animate=   {{ opacity: 1, x: 0   }} 
+            exit=      {{ opacity: 0, x: -40 }} 
+            transition={{ duration: 0.22     }}
+            >
               <h1 className="text-white font-extrabold text-[30px] lg:text-[36px] leading-tight mb-1">Set up your presence</h1>
               <p className="text-white/45 text-[14px] mb-6">This is how other creators will find and recognize you</p>
 

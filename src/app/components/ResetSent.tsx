@@ -5,7 +5,7 @@ import {
   ArrowRight,
   Check, Info
 } from "lucide-react";
-import { GUTTER, SCREEN } from "../auth-ui"
+import { GUTTER, SCREEN } from "../Auth"
 
 import GhostBtn from './ui/GhostBtn'
 import PrimaryBtn from './ui/PrimaryBtn'
@@ -17,7 +17,7 @@ export default function ResetSent({
   onOpenLink: () => void; onResend: (token: string | null) => void; onBackToLogin: () => void;
 }) {
   const [resending, setResending] = useState(false);
-  const [resent, setResent] = useState(false);
+  const [resent, setResent]       = useState(false);
 
   const handleResend = async () => {
     setResending(true);
@@ -33,21 +33,33 @@ export default function ResetSent({
       <div className="flex-1 flex flex-col items-center justify-center text-center space-y-6 lg:pt-2">
         {/* Success ring */}
         <motion.div
-          initial={{ scale: 0 }} animate={{ scale: 1 }}
+          initial=   {{ scale: 0                                                }} 
+          animate=   {{ scale: 1                                                }}
           transition={{ type: "spring", damping: 14, stiffness: 200, delay: 0.1 }}
           className="relative"
         >
           <div className="w-24 h-24 rounded-full flex items-center justify-center" style={{ background: "rgba(0,174,239,0.15)", border: "2px solid rgba(0,174,239,0.4)" }}>
-            <motion.div initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ delay: 0.35, type: "spring", damping: 14 }}>
+            <motion.div 
+            initial=   {{ scale: 0                                 }} 
+            animate=   {{ scale: 1                                 }} 
+            transition={{ delay: 0.35, type: "spring", damping: 14 }}
+            >
               <Check className="w-10 h-10" style={{ color: "#00AEEF" }} strokeWidth={2.5} />
             </motion.div>
           </div>
           {/* Pulse ring */}
-          <motion.div animate={{ scale: [1, 1.4], opacity: [0.4, 0] }} transition={{ duration: 1.5, repeat: Infinity, ease: "easeOut" }}
+          <motion.div 
+          animate=   {{ scale: [1, 1.4], opacity: [0.4, 0]               }} 
+          transition={{ duration: 1.5, repeat: Infinity, ease: "easeOut" }}
             className="absolute inset-0 rounded-full" style={{ border: "2px solid rgba(0,174,239,0.4)" }} />
         </motion.div>
 
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.4 }} className="space-y-3">
+        <motion.div 
+        initial=   {{ opacity: 0, y: 12 }} 
+        animate=   {{ opacity: 1, y: 0  }} 
+        transition={{ delay: 0.4        }} 
+        className="space-y-3"
+        >
           <h1 className="text-white font-extrabold text-[30px] lg:text-[36px]">Check your email</h1>
           <p className="text-white/50 text-[15px] lg:text-[16px] leading-relaxed max-w-xs mx-auto">
             We've sent a password reset link. It'll expire in 15 minutes.
@@ -55,7 +67,10 @@ export default function ResetSent({
         </motion.div>
 
         {/* Tips */}
-        <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.55 }}
+        <motion.div 
+        initial=   {{ opacity: 0, y: 12 }} 
+        animate=   {{ opacity: 1, y: 0  }} 
+        transition={{ delay: 0.55       }}
           className="w-full rounded-2xl p-4 space-y-2.5" style={{ background: "rgba(0,40,100,0.35)", border: "1px solid rgba(0,174,239,0.18)" }}>
           {["Check your spam or junk folder", "The link expires in 15 minutes", "Request a new link if needed"].map((tip) => (
             <div key={tip} className="flex items-center gap-3">

@@ -4,7 +4,7 @@ interface YouTubePlayerProps {
   videoUrl: string;
   username: string;
   isActive: boolean;
-  paused: boolean;
+  paused:   boolean;
 }
 
 // ─── YouTube IFrame API loader ───────────────────────────────────────────────
@@ -19,8 +19,8 @@ function ensureYouTubeApiReady(callback: () => void): void {
   if (!ytApiPromise) {
     ytApiPromise = new Promise<void>((resolve) => {
       (window as any).onYouTubeIframeAPIReady = () => resolve();
-      const tag = document.createElement("script");
-      tag.src = "https://www.youtube.com/iframe_api";
+      const tag  = document.createElement("script");
+      tag.src    = "https://www.youtube.com/iframe_api";
       document.head.appendChild(tag);
     });
   }
@@ -29,12 +29,13 @@ function ensureYouTubeApiReady(callback: () => void): void {
 }
 
 export function YouTubePlayer({ videoUrl, username, isActive, paused }: YouTubePlayerProps) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const playerRef = useRef<any>(null);
-  const isActiveRef = useRef(isActive);
-  const pausedRef = useRef(paused);
-  const videoId = videoUrl.split("/").pop();
+  const containerRef     = useRef<HTMLDivElement | null>(null);
+  const playerRef        = useRef<any>(null);
+  const isActiveRef      = useRef(isActive);
+  const pausedRef        = useRef(paused);
   const unmuteTimeoutRef = useRef<number | null>(null);
+  
+  const videoId = videoUrl.split("/").pop();
 
   // Keep latest props available inside callbacks
   useEffect(() => {
@@ -53,13 +54,13 @@ export function YouTubePlayer({ videoUrl, username, isActive, paused }: YouTubeP
       playerRef.current = new (window as any).YT.Player(container, {
         videoId,
         playerVars: {
-          autoplay: isActiveRef.current && !pausedRef.current ? 1 : 0,
-          mute: 1, // start muted to satisfy autoplay policy
-          loop: 1,
-          playlist: videoId,
+          autoplay:    isActiveRef.current && !pausedRef.current ? 1 : 0,
+          mute:        1, // start muted to satisfy autoplay policy
+          loop:        1,
+          playlist:    videoId,
           playsinline: 1,
-          controls: 0,
-          rel: 0,
+          controls:    0,
+          rel:         0,
         },
         events: {
           onReady: () => {

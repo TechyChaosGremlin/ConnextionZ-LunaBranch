@@ -2,14 +2,14 @@ import { useState, useEffect, useRef } from "react";
 import { VideoPlayer } from "./VideoPlayer";
 
 interface Video {
-  id: string;
-  username: string;
+  id:          string;
+  username:    string;
   description: string;
-  likes: number;
-  comments: number;
-  shares: number;
-  thumbnail: string;
-  videoUrl: string;
+  likes:       number;
+  comments:    number;
+  shares:      number;
+  thumbnail:   string;
+  videoUrl:    string;
 }
 
 // Curated video URLs (YouTube embeds), each matched to a creator's activity.
@@ -67,12 +67,12 @@ const generateMockVideos = (startIndex: number, count: number): Video[] => {
 };
 
 export function VideoFeed() {
-  const [videos, setVideos] = useState<Video[]>(() => generateMockVideos(0, 10));
+  const [videos, setVideos]                       = useState<Video[]>(() => generateMockVideos(0, 10));
   const [currentVideoIndex, setCurrentVideoIndex] = useState(0);
-  const [isLoading, setIsLoading] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const touchStartY = useRef<number>(0);
-  const isScrolling = useRef(false);
+  const [isLoading, setIsLoading]                 = useState(false);
+  const containerRef                              = useRef<HTMLDivElement>(null);
+  const touchStartY                               = useRef<number>(0);
+  const isScrolling                               = useRef(false);
 
   // Load more videos when approaching the end
   useEffect(() => {

@@ -3,7 +3,7 @@ import {
   PROVIDER_LABEL, type Provider
 } from "../auth-store";
 
-import AppleMark from "./ui/AppleMark"
+import AppleMark  from "./ui/AppleMark"
 import GoogleMark from "./ui/GoogleMark"
 
 // ─── PROVIDER SIGN-IN SHEET ──────────────────────────────────────────────────
@@ -12,36 +12,37 @@ import GoogleMark from "./ui/GoogleMark"
 // (`signInWithProvider`, account linking) stays exactly as it is.
 
 
-/** The identity a provider sign-in resolves to — real OAuth returns the same shape. */
 export interface ProviderIdentity { email: string; firstName: string; lastName: string }
 
 const PROVIDER_ACCOUNTS: ProviderIdentity[] = [
-  { email: "demo@connextionz.app", firstName: "Maya", lastName: "Chen" },
+  { email: "demo@connextionz.app",  firstName: "Maya", lastName: "Chen"   },
   { email: "alex.rivera@gmail.com", firstName: "Alex", lastName: "Rivera" },
 ];
 
 const PROVIDER_MARK: Record<Provider, { node: React.ReactNode; bg: string }> = {
   google: { node: <GoogleMark className="w-5 h-5" />, bg: "#ffffff" },
-  apple: { node: <AppleMark className="w-5 h-5" />, bg: "#000000" },
+  apple:  { node: <AppleMark className="w-5 h-5" />,  bg: "#000000" },
 };
 
 export default function ProviderSheet({
   provider, onPick, onCancel,
 }: { provider: Provider; onPick: (id: ProviderIdentity) => void; onCancel: () => void }) {
-  const mark = PROVIDER_MARK[provider];
+  const mark  = PROVIDER_MARK[provider];
   const label = PROVIDER_LABEL[provider];
 
   return (
     <motion.div
-      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      initial={{ opacity: 0 }} 
+      animate={{ opacity: 1 }} 
+      exit={   { opacity: 0 }}
       className="fixed inset-0 z-50 flex items-center justify-center p-5"
       style={{ background: "rgba(0,4,14,0.72)", backdropFilter: "blur(6px)" }}
       onClick={onCancel}
     >
       <motion.div
-        initial={{ opacity: 0, scale: 0.94, y: 12 }}
-        animate={{ opacity: 1, scale: 1, y: 0 }}
-        exit={{ opacity: 0, scale: 0.96, y: 8 }}
+        initial=   {{ opacity: 0, scale: 0.94, y: 12              }}
+        animate=   {{ opacity: 1, scale: 1,    y: 0               }}
+        exit=      {{ opacity: 0, scale: 0.96, y: 8               }}
         transition={{ type: "spring", damping: 26, stiffness: 320 }}
         onClick={(e) => e.stopPropagation()}
         className="w-full max-w-[380px] rounded-3xl overflow-hidden"

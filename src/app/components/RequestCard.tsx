@@ -14,22 +14,24 @@ export function RequestCard({ req, onAccept, onIgnore }: RequestCardProps) {
   const isDark = useTheme();
   const [expanded, setExpanded] = useState(false);
 
-  const cardBg = isDark ? "rgba(0,30,70,0.5)" : "rgba(255,255,255,0.85)";
+  const cardBg =        isDark ? "rgba(0,30,70,0.5)" : "rgba(255,255,255,0.85)";
   const usernameColor = isDark ? "#fff" : "#0a0e1a";
-  const messageColor = isDark ? "rgba(255,255,255,0.7)" : "rgba(10,14,26,0.65)";
-  const metaBg = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)";
-  const metaBorder = isDark ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(0,0,0,0.08)";
-  const metaColor = isDark ? "rgba(255,255,255,0.6)" : "rgba(10,14,26,0.55)";
-  const ignoreBg = isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)";
-  const ignoreBorder = isDark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.08)";
-  const ignoreColor = isDark ? "rgba(255,255,255,0.5)" : "rgba(10,14,26,0.4)";
-  const mutualColor = isDark ? "rgba(255,255,255,0.4)" : "rgba(10,14,26,0.4)";
-  const timeColor = isDark ? "rgba(255,255,255,0.35)" : "rgba(10,14,26,0.35)";
+  const messageColor =  isDark ? "rgba(255,255,255,0.7)" : "rgba(10,14,26,0.65)";
+  const metaBg =        isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)";
+  const metaBorder =    isDark ? "1px solid rgba(255,255,255,0.1)" : "1px solid rgba(0,0,0,0.08)";
+  const metaColor =     isDark ? "rgba(255,255,255,0.6)" : "rgba(10,14,26,0.55)";
+  const ignoreBg =      isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)";
+  const ignoreBorder =  isDark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.08)";
+  const ignoreColor =   isDark ? "rgba(255,255,255,0.5)" : "rgba(10,14,26,0.4)";
+  const mutualColor =   isDark ? "rgba(255,255,255,0.4)" : "rgba(10,14,26,0.4)";
+  const timeColor =     isDark ? "rgba(255,255,255,0.35)" : "rgba(10,14,26,0.35)";
 
   return (
     <motion.div layout
-      initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, x: -60, scale: 0.95 }}
-      transition={{ duration: 0.25 }}
+      initial=   {{ opacity: 0, y: 20               }} 
+      animate=   {{ opacity: 1, y: 0                }} 
+      exit=      {{ opacity: 0, x: -60, scale: 0.95 }}
+      transition={{ duration: 0.25                  }}
       className="rounded-3xl overflow-hidden"
       style={{ background: cardBg, border: `1px solid ${req.accent}30` }}
     >

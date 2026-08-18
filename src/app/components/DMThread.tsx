@@ -1,6 +1,9 @@
 import { useState, useEffect, useRef } from "react";
 import { motion } from "motion/react";
-import { ArrowLeft, Phone, Video, MoreHorizontal, Smile, Send } from "lucide-react";
+import { 
+  ArrowLeft, Phone, Video, 
+  MoreHorizontal, Smile, Send 
+} from "lucide-react";
 import { useTheme } from "../ThemeContext";
 import { uid } from "../seed/data";
 import type { Conversation, DM } from "../seed/types";
@@ -11,41 +14,49 @@ interface DMThreadProps {
 }
 
 export function DMThread({ convo, onBack }: DMThreadProps) {
-  const isDark = useTheme();
+  const isDark          = useTheme();
   const [msgs, setMsgs] = useState<DM[]>(convo.messages);
   const [text, setText] = useState("");
-  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const bottomRef       = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView(); }, [msgs]);
 
   const send = () => {
     const t = text.trim();
     if (!t) return;
-    setMsgs((prev) => [...prev, { id: uid(), from: "me", text: t, time: "Just now", read: false }]);
+    setMsgs((prev) => [...prev, { 
+      id: uid(), 
+      from: "me", 
+      text: t, 
+      time: "Just now", 
+      read: false 
+    }]);
     setText("");
   };
 
   const D = {
-    bg: isDark ? "linear-gradient(160deg,#00071a,#000c22)" : "linear-gradient(160deg,#f2f5fb,#eaf1fc)",
-    headerBorder: isDark ? "rgba(0,174,239,0.12)" : "rgba(0,0,0,0.08)",
-    btnBg: isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)",
-    iconColor: isDark ? "rgba(255,255,255,0.6)" : "rgba(10,14,26,0.5)",
-    arrowColor: isDark ? "#fff" : "#0a0e1a",
-    username: isDark ? "#fff" : "#0a0e1a",
-    offlineColor: isDark ? "rgba(255,255,255,0.35)" : "rgba(10,14,26,0.35)",
-    themBubble: isDark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.07)",
-    themText: isDark ? "#fff" : "#0a0e1a",
-    timeColor: isDark ? "rgba(255,255,255,0.3)" : "rgba(10,14,26,0.35)",
-    inputBg: isDark ? "rgba(0,60,140,0.3)" : "rgba(0,0,0,0.05)",
-    inputBorder: isDark ? "1px solid rgba(0,174,239,0.2)" : "1px solid rgba(0,0,0,0.08)",
-    inputText: isDark ? "#fff" : "#0a0e1a",
+    bg:             isDark ? "linear-gradient(160deg,#00071a,#000c22)" : "linear-gradient(160deg,#f2f5fb,#eaf1fc)",
+    headerBorder:   isDark ? "rgba(0,174,239,0.12)" : "rgba(0,0,0,0.08)",
+    btnBg:          isDark ? "rgba(255,255,255,0.07)" : "rgba(0,0,0,0.05)",
+    iconColor:      isDark ? "rgba(255,255,255,0.6)" : "rgba(10,14,26,0.5)",
+    arrowColor:     isDark ? "#fff" : "#0a0e1a",
+    username:       isDark ? "#fff" : "#0a0e1a",
+    offlineColor:   isDark ? "rgba(255,255,255,0.35)" : "rgba(10,14,26,0.35)",
+    themBubble:     isDark ? "rgba(255,255,255,0.09)" : "rgba(0,0,0,0.07)",
+    themText:       isDark ? "#fff" : "#0a0e1a",
+    timeColor:      isDark ? "rgba(255,255,255,0.3)" : "rgba(10,14,26,0.35)",
+    inputBg:        isDark ? "rgba(0,60,140,0.3)" : "rgba(0,0,0,0.05)",
+    inputBorder:    isDark ? "1px solid rgba(0,174,239,0.2)" : "1px solid rgba(0,0,0,0.08)",
+    inputText:      isDark ? "#fff" : "#0a0e1a",
     inputBorderTop: isDark ? "rgba(0,174,239,0.1)" : "rgba(0,0,0,0.07)",
-    smileColor: isDark ? "rgba(255,255,255,0.35)" : "rgba(10,14,26,0.35)",
+    smileColor:     isDark ? "rgba(255,255,255,0.35)" : "rgba(10,14,26,0.35)",
   };
 
   return (
     <motion.div
-      initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
+      initial=   {{ x: "100%"                                   }} 
+      animate=   {{ x: 0                                        }} 
+      exit=      {{ x: "100%"                                   }}
       transition={{ type: "spring", damping: 32, stiffness: 300 }}
       className="absolute inset-0 z-30 flex flex-col"
       style={{ background: D.bg }}

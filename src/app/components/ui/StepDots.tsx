@@ -1,4 +1,4 @@
-import { motion } from "motion/react";
+import { motion, AnimatePresence } from "motion/react";
 
 export default function StepDots({ step, total }: { step: number; total: number }) {
   return (

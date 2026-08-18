@@ -1,9 +1,7 @@
 import { motion, AnimatePresence } from "motion/react";
-import {
-  Zap, TrendingUp, Users
-} from "lucide-react";
+import { Zap, TrendingUp, Users  } from "lucide-react";
 
-import { Screen } from "../auth-ui"
+import { Screen } from "../Auth"
 import Logo       from "./ui/Logo"
 
 // ─── DESKTOP BRAND PANEL ─────────────────────────────────────────────────────
@@ -46,9 +44,9 @@ const PANEL_COPY: Record<Screen, { title: React.ReactNode; sub: string }> = {
 };
 
 const PANEL_FEATURES = [
-  { icon: Users, text: "Browse creators by niche, reach and Collab Score" },
-  { icon: Zap, text: "Send a collab request in a single tap" },
-  { icon: TrendingUp, text: "Track every partnership from one dashboard" },
+  { icon: Users,      text: "Browse creators by niche, reach and Collab Score" },
+  { icon: Zap,        text: "Send a collab request in a single tap"            },
+  { icon: TrendingUp, text: "Track every partnership from one dashboard"       },
 ];
 
 export default function BrandPanel({ screen }: { screen: Screen }) {
@@ -88,10 +86,10 @@ export default function BrandPanel({ screen }: { screen: Screen }) {
         <AnimatePresence mode="wait">
           <motion.div
             key={screen}
-            initial={{ opacity: 0, y: 14 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            transition={{ duration: 0.28 }}
+            initial=   {{ opacity: 0, y: 14  }}
+            animate=   {{ opacity: 1, y: 0   }}
+            exit=      {{ opacity: 0, y: -10 }}
+            transition={{ duration: 0.28     }}
           >
             <h2 className="text-white font-extrabold text-[44px] xl:text-[54px] leading-[1.08] tracking-tight">
               {copy.title}
