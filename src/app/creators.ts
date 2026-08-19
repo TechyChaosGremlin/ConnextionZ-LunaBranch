@@ -54,6 +54,10 @@ export interface FeedVideo extends ContentItem {
   comments: number;
   shares: number;
   saves: number;
+  /** An uploaded video file, when the post has one — image-only posts have none. */
+  mediaUrl?: string;
+  /** Whether the signed-in viewer has already liked this post. */
+  isLiked?: boolean;
 }
 
 export interface Creator {

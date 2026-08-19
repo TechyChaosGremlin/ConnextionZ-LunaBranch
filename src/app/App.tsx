@@ -1,12 +1,15 @@
-import { useState, useCallback, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import { TrendingSounds } from "./TrendingSounds";
 import { AuthFlow } from "./Auth";
 import { SettingsScreen, DeleteProfileModal } from "./Settings";
 import { type Account, getSession, endSession } from "./auth-store";
 import { GoLiveSetup, CreatorLiveView, ViewerLiveView, LiveBannerStrip } from "./LiveStream";
 import { InboxScreen } from "./Inbox";
-import { YouTubePlayer } from "./components/YouTubePlayer";
 import { ThemeContext, useTheme } from "./ThemeContext";
+import { creatorById, type FeedVideo } from "./creators";
+import { useFeed } from "./feed-store";
+import { activateFollowGraph, useFollowingIds } from "./follow-store";
+import { activateLikeGraph, useLike } from "./like-store";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Heart, MessageCircle, Bookmark, Music,
@@ -14,96 +17,79 @@ import {
   ChevronUp, ChevronDown, Navigation,
 } from "lucide-react";
 
-// ─── DATA ────────────────────────────────────────────────────────────────────
+// ─── FEED ADAPTER ────────────────────────────────────────────────────────────
+//
+// The screen renders one shape for a slide, `DisplayVideo` — a post's own
+// counters plus whatever the creator directory knows about who posted it.
+// `FeedVideo` only carries a `creatorId`, so the lookup happens once here
+// rather than at every place a video is rendered.
 
-const VIDEOS = [
-  {
-    id: "1",
-    username: "zara.creates",
-    avatarUrl: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&auto=format",
-    caption: "Late night studio sessions always hit different 🎵 new track dropping this Friday",
-    hashtags: ["#producer", "#musicmaker", "#newmusic"],
-    audio: "Original Sound — zara.creates",
-    collabStatus: "Available for Collaboration",
-    collabScore: 4.9, collabCount: 312,
-    likes: 284700, comments: 4820, shares: 12400, saves: 9300,
-    thumbnail: "https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=600&h=1066&fit=crop&auto=format",
-    videoUrl: "https://www.youtube.com/embed/SxUBblhKZFg",
-  },
-  {
-    id: "2",
-    username: "milo.visuals",
-    avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop&auto=format",
-    caption: "Golden hour was NOT messing around today 📸 caught the whole shift in one frame",
-    hashtags: ["#photography", "#goldenhour", "#creator"],
-    audio: "golden hour — JVKE",
-    collabStatus: "Open to Brand Deals",
-    collabScore: 4.7, collabCount: 184,
-    likes: 531200, comments: 7650, shares: 23800, saves: 18900,
-    thumbnail: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=600&h=1066&fit=crop&auto=format",
-    videoUrl: "https://www.youtube.com/embed/TbixociDmPY",
-  },
-  {
-    id: "3",
-    username: "nova.dj",
-    avatarUrl: "https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=100&h=100&fit=crop&auto=format",
-    caption: "The drop at 2:14 will literally change your life. You've been warned 🔊",
-    hashtags: ["#dj", "#electronicmusic", "#setlife"],
-    audio: "HYPERSONIC — nova.dj",
-    collabStatus: "Available for Collaboration",
-    collabScore: 4.8, collabCount: 521,
-    likes: 892400, comments: 11200, shares: 45600, saves: 32100,
-    thumbnail: "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=600&h=1066&fit=crop&auto=format",
-    videoUrl: "https://www.youtube.com/embed/nQ4H5WUpKyA",
-  },
-  {
-    id: "4",
-    username: "lex.codes",
-    avatarUrl: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=100&h=100&fit=crop&auto=format",
-    caption: "Built this entire app in a weekend. No sleep, just vibes and caffeine ⚡",
-    hashtags: ["#buildinpublic", "#devtok", "#indiedev"],
-    audio: "lo-fi beats — study playlist",
-    collabStatus: "Seeking Tech Sponsors",
-    collabScore: 4.5, collabCount: 97,
-    likes: 127600, comments: 3450, shares: 8900, saves: 15700,
-    thumbnail: "https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=600&h=1066&fit=crop&auto=format",
-    videoUrl: "https://www.youtube.com/embed/oYxTTirKY8M",
-  },
-  {
-    id: "5",
-    username: "ren.filmco",
-    avatarUrl: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=100&h=100&fit=crop&auto=format",
-    caption: "Shot this on a $200 camera and people think it's RED footage 🎬 cinematography is 90% light",
-    hashtags: ["#filmmaking", "#cinematography", "#indiefilm"],
-    audio: "Cinematic Score — Artlist",
-    collabStatus: "Available for Collaboration",
-    collabScore: 4.6, collabCount: 238,
-    likes: 344900, comments: 6780, shares: 19200, saves: 24600,
-    thumbnail: "https://images.unsplash.com/photo-1540569876291-7b03b5441327?w=600&h=1066&fit=crop&auto=format",
-    videoUrl: "https://www.youtube.com/embed/xBasQG_6p40",
-  },
-  {
+interface DisplayVideo {
+  id: string;
+  creatorId: string;
+  username: string;
+  avatarUrl: string;
+  collabStatus: string;
+  collabScore: number;
+  collabCount: number;
+  caption: string;
+  hashtags: string[];
+  audio: string;
+  likes: number;
+  comments: number;
+  shares: number;
+  saves: number;
+  thumbnail: string;
+  /** An uploaded video file, when the post has one — image-only posts have none. */
+  mediaUrl?: string;
+  isLiked: boolean;
+}
 
-    id: "6",
-    username: "xander.djs",
-    avatarUrl:
-        "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=100&h=100&fit=crop&auto=format",
-    caption:
-        "Live from the booth tonight — this drop goes HARD. Turn it up 🔊🎧",
-    hashtags: ["#dj", "#electronicmusic", "#setlife", "#live"],
-    audio: "MIDNIGHT PULSE — xander.djs",
-    collabStatus: "Available for Collaboration",
-    collabScore: 4.8,
-    collabCount: 412,
-    likes: 764300,
-    comments: 9340,
-    shares: 38900,
-    saves: 27400,
-    thumbnail:
-        "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=600&h=1066&fit=crop&auto=format",
-    videoUrl: "https://www.youtube.com/embed/UwLp-15miww",
-  }
-];
+function toDisplayVideo(item: FeedVideo): DisplayVideo {
+  const creator = creatorById(item.creatorId);
+  return {
+    id: item.id,
+    creatorId: item.creatorId,
+    username: creator?.username ?? "",
+    avatarUrl: creator?.avatarUrl ?? "",
+    collabStatus: creator?.collabStatus ?? "",
+    collabScore: creator?.collabScore ?? 0,
+    collabCount: creator?.collabCount ?? 0,
+    caption: item.caption,
+    hashtags: item.hashtags,
+    audio: item.audio,
+    likes: item.likes,
+    comments: item.comments,
+    shares: item.shares,
+    saves: item.saves,
+    thumbnail: item.thumbnail,
+    mediaUrl: item.mediaUrl,
+    isLiked: item.isLiked ?? false,
+  };
+}
+
+/** The video background for a slide whose post has an uploaded video file. */
+function PostVideo({ mediaUrl, isActive, paused }: { mediaUrl: string; isActive: boolean; paused: boolean }) {
+  const ref = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (isActive && !paused) el.play().catch(() => {});
+    else el.pause();
+  }, [isActive, paused]);
+
+  return (
+    <video
+      ref={ref}
+      src={mediaUrl}
+      loop
+      muted
+      playsInline
+      className="absolute inset-0 w-full h-full object-cover"
+    />
+  );
+}
 
 // ─── COMMENTS DATA ───────────────────────────────────────────────────────────
 
@@ -146,9 +132,6 @@ const SEED_COMMENTS: Record<string, Comment[]> = {
     { id: "c4", username: "reel.rin", avatarUrl: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=60&h=60&fit=crop&auto=format", text: "Tutorial please! I'll sub twice if I have to", likes: 311, time: "4h" },
   ],
 };
-
-/** Creators the signed-in user follows — what the Following tab narrows to. */
-const FOLLOWING_IDS = ["1", "3", "5"];
 
 const fmt = (n: number) =>
   n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + "M"
@@ -285,7 +268,7 @@ function CollabButton({ onTap }: { onTap: () => void }) {
 function CommentSheet({
   video, comments, onAddComment, onClose,
 }: {
-  video: typeof VIDEOS[0]; comments: Comment[];
+  video: DisplayVideo; comments: Comment[];
   onAddComment: (text: string) => void; onClose: () => void;
 }) {
   const isDark = useTheme();
@@ -390,7 +373,7 @@ const PLATFORMS = [
   { id: "reddit",    label: "Reddit",    color: "#fff",    bg: "#FF4500", icon: "r/" },
 ];
 
-function ShareSheet({ video, onClose }: { video: typeof VIDEOS[0]; onClose: () => void }) {
+function ShareSheet({ video, onClose }: { video: DisplayVideo; onClose: () => void }) {
   const isDark = useTheme();
   const [copied, setCopied] = useState(false);
   const [sharedTo, setSharedTo] = useState<string | null>(null);
@@ -466,9 +449,9 @@ function ShareSheet({ video, onClose }: { video: typeof VIDEOS[0]; onClose: () =
 // ─── ACTION RAIL ──────────────────────────────────────────────────────────────
 
 function ActionRail({
-  video, liked, saved, onLike, onSave, onCollab, onComment, onShare,
+  video, liked, likeCount, saved, onLike, onSave, onCollab, onComment, onShare,
 }: {
-  video: typeof VIDEOS[0]; liked: boolean; saved: boolean;
+  video: DisplayVideo; liked: boolean; likeCount: number; saved: boolean;
   onLike: () => void; onSave: () => void; onCollab: () => void; onComment: () => void; onShare: () => void;
 }) {
   return (
@@ -482,7 +465,7 @@ function ActionRail({
         <motion.div animate={liked ? { scale: [1, 1.35, 1] } : {}} transition={{ duration: 0.25 }}>
           <Heart className={`w-7 h-7 drop-shadow-lg ${liked ? "fill-red-500 text-red-500" : "text-white"}`} />
         </motion.div>
-        <span className="text-white text-[11px] font-semibold">{fmt(video.likes + (liked ? 1 : 0))}</span>
+        <span className="text-white text-[11px] font-semibold">{fmt(likeCount)}</span>
       </motion.button>
       <div className="flex flex-col items-center gap-1">
         <motion.button whileTap={{ scale: 0.85 }} onClick={onComment}>
@@ -505,7 +488,7 @@ function ActionRail({
 
 // ─── VIDEO INFO (BOTTOM LEFT) ─────────────────────────────────────────────────
 
-function VideoInfo({ video }: { video: typeof VIDEOS[0] }) {
+function VideoInfo({ video }: { video: DisplayVideo }) {
   return (
     <div className="absolute left-4 bottom-28 right-20 z-10 space-y-2">
       <div className="flex items-center gap-2">
@@ -554,7 +537,7 @@ const COLLAB_TYPES = [
 const BUDGETS = ["Under $500", "$500–$2K", "$2K–$10K", "$10K+", "Open"];
 const TIMELINES = ["ASAP", "1–2 weeks", "1 month", "3+ months"];
 
-function CollabSheet({ video, onClose }: { video: typeof VIDEOS[0]; onClose: () => void }) {
+function CollabSheet({ video, onClose }: { video: DisplayVideo; onClose: () => void }) {
   const isDark = useTheme();
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -724,21 +707,35 @@ export default function App() {
   const [liveTitle, setLiveTitle] = useState("");
   const [idx, setIdx] = useState(0);
   const [dir, setDir] = useState(1);
-  const [liked, setLiked] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
-  const [collabTarget, setCollabTarget] = useState<typeof VIDEOS[0] | null>(null);
-  const [commentTarget, setCommentTarget] = useState<typeof VIDEOS[0] | null>(null);
-  const [shareTarget, setShareTarget] = useState<typeof VIDEOS[0] | null>(null);
-  const [userComments, setUserComments] = useState<Record<string, Comment[]>>(
-    Object.fromEntries(VIDEOS.map((v) => [v.id, SEED_COMMENTS[v.id] ?? []]))
-  );
+  const [collabTarget, setCollabTarget] = useState<DisplayVideo | null>(null);
+  const [commentTarget, setCommentTarget] = useState<DisplayVideo | null>(null);
+  const [shareTarget, setShareTarget] = useState<DisplayVideo | null>(null);
+  const [userComments, setUserComments] = useState<Record<string, Comment[]>>({});
   const [paused, setPaused] = useState(false);
   const touchStartY = useRef(0);
 
+  const { items: feedItems, status: feedStatus, error: feedError, loadMore, reachedEnd, reload } = useFeed();
+  const followingIds = useFollowingIds();
+
+  useEffect(() => {
+    activateFollowGraph(account.email);
+    activateLikeGraph(account.email);
+  }, [account.email]);
+
   // The two top-bar tabs are the same feed filtered, so switching them restarts
   // at the first video rather than leaving `idx` past the end of a shorter list.
-  const feed = feedTab === "following" ? VIDEOS.filter((v) => FOLLOWING_IDS.includes(v.id)) : VIDEOS;
+  const displayItems = useMemo(() => feedItems.map(toDisplayVideo), [feedItems]);
+  const feed = feedTab === "following" ? displayItems.filter((v) => followingIds.includes(v.creatorId)) : displayItems;
   const video = feed[Math.min(idx, feed.length - 1)];
+
+  const likeState = useLike(video?.id ?? "", video?.isLiked ?? false, video?.likes ?? 0);
+
+  // A page after the next is requested a slide before it is needed, so
+  // scrolling never waits on a page that is still in flight.
+  useEffect(() => {
+    if (!reachedEnd && idx >= feed.length - 2) loadMore();
+  }, [idx, feed.length, reachedEnd, loadMore]);
 
   const goNext = useCallback(() => { if (idx < feed.length - 1) { setDir(1); setIdx((i) => i + 1); } }, [idx, feed.length]);
   const goPrev = useCallback(() => { if (idx > 0) { setDir(-1); setIdx((i) => i - 1); } }, [idx]);
@@ -798,6 +795,7 @@ export default function App() {
           onWheel={handleWheel}
         >
           {/* ── Video slides ── */}
+          {video ? (
           <AnimatePresence initial={false} custom={dir} mode="wait">
             <motion.div key={video.id} custom={dir}
               initial={{ y: dir > 0 ? "100%" : "-100%", opacity: 0.4 }}
@@ -809,13 +807,14 @@ export default function App() {
             >
               <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${video.thumbnail})` }} />
 
-              {/* YouTube video background */}
-              <YouTubePlayer
-                videoUrl={video.videoUrl}
-                username={video.username}
-                isActive={idx === feed.findIndex((v) => v.id === video.id)}
-                paused={paused}
-              />
+              {/* Uploaded video background — image-only posts fall back to the thumbnail above */}
+              {video.mediaUrl && (
+                <PostVideo
+                  mediaUrl={video.mediaUrl}
+                  isActive={idx === feed.findIndex((v) => v.id === video.id)}
+                  paused={paused}
+                />
+              )}
 
               <div className="absolute inset-0" style={{ background: "linear-gradient(to bottom,rgba(0,0,0,0.25) 0%,transparent 25%,transparent 55%,rgba(0,0,0,0.65) 80%,rgba(0,0,0,0.85) 100%)" }} />
 
@@ -867,8 +866,8 @@ export default function App() {
                 </div>
               )}
 
-              <ActionRail video={video} liked={!!liked[video.id]} saved={!!saved[video.id]}
-                onLike={() => setLiked((l) => ({ ...l, [video.id]: !l[video.id] }))}
+              <ActionRail video={video} liked={likeState.liked} likeCount={likeState.likes} saved={!!saved[video.id]}
+                onLike={() => { void likeState.toggle(); }}
                 onSave={() => setSaved((s) => ({ ...s, [video.id]: !s[video.id] }))}
                 onCollab={() => setCollabTarget(video)}
                 onComment={() => setCommentTarget(video)}
@@ -887,6 +886,25 @@ export default function App() {
               </div>
             </motion.div>
           </AnimatePresence>
+          ) : (
+            <div className="absolute inset-0 flex items-center justify-center px-8 text-center">
+              {feedStatus === "error" ? (
+                <div className="flex flex-col items-center gap-3">
+                  <span className="text-white/80 text-sm">{feedError}</span>
+                  <button onClick={reload}
+                    className="px-4 py-2 rounded-full text-xs font-semibold text-white"
+                    style={{ background: "rgba(255,255,255,0.12)" }}>
+                    Retry
+                  </button>
+                </div>
+              ) : feedStatus === "loading" ? (
+                <span className="text-white/60 text-sm">Loading feed…</span>
+              ) : (
+                <span className="text-white/60 text-sm">No posts yet.</span>
+              )}
+            </div>
+          )}
+
 
           {/* ── Bottom nav ── */}
           <BottomNav
@@ -950,10 +968,10 @@ export default function App() {
                 <motion.div key="comment-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
                   className="absolute inset-0 z-40" style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}
                   onClick={() => setCommentTarget(null)} />
-                <CommentSheet key="comment-sheet" video={commentTarget} comments={userComments[commentTarget.id] ?? []}
+                <CommentSheet key="comment-sheet" video={commentTarget} comments={userComments[commentTarget.id] ?? SEED_COMMENTS[commentTarget.id] ?? []}
                   onAddComment={(text) => setUserComments((prev) => ({
                     ...prev,
-                    [commentTarget.id]: [...prev[commentTarget.id], { id: `u${Date.now()}`, username: "you", avatarUrl: "", text, likes: 0, time: "now" }],
+                    [commentTarget.id]: [...(prev[commentTarget.id] ?? SEED_COMMENTS[commentTarget.id] ?? []), { id: `u${Date.now()}`, username: "you", avatarUrl: "", text, likes: 0, time: "now" }],
                   }))}
                   onClose={() => setCommentTarget(null)} />
               </>

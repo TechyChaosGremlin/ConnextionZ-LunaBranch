@@ -32,7 +32,7 @@ def run_migrations() -> None:
     config = Config(str(ALEMBIC_CONFIG_PATH))
     config.set_main_option("sqlalchemy.url", DATABASE_URL)
     existing_tables = set(inspect(engine).get_table_names())
-    required_tables = {"users", "profiles", "follows", "posts", "playlists"}
+    required_tables = {"users", "profiles", "follows", "posts", "post_likes", "playlists"}
     if required_tables.issubset(existing_tables) and "alembic_version" not in existing_tables:
         command.stamp(config, "head")
     command.upgrade(config, "head")

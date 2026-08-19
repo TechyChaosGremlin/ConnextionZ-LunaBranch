@@ -5,6 +5,7 @@ export type GraphQLPost = {
   caption: string;
   views: number;
   likes: number;
+  isLiked?: boolean | null;
   hashtags?: string[] | null;
   audio?: string | null;
   visibility?: string | null;
@@ -147,6 +148,7 @@ export async function fetchFeedPageFromApi(cursor: string | null, limit = 10): P
           caption
           views
           likes
+          isLiked
           hashtags
           audio
           visibility
@@ -157,7 +159,7 @@ export async function fetchFeedPageFromApi(cursor: string | null, limit = 10): P
           shares
           saves
           collabWith
-          creator { id username displayName avatarUrl avatarColor verified }
+          creator { id username displayName avatarUrl avatarColor verified collabScore collabCount followers following openToCollab }
         }
       }
     }
@@ -169,7 +171,7 @@ export async function searchPosts(query: string, limit = 20): Promise<GraphQLFee
   const data = await graphqlRequest<{ searchPosts: GraphQLFeedItem[] }>(`
     query SearchPosts($query: String!, $limit: Int!) {
       searchPosts(query: $query, limit: $limit) {
-        id thumbnail mediaUrl caption views likes hashtags audio visibility
+        id thumbnail mediaUrl caption views likes isLiked hashtags audio visibility
         allowComments allowCollabs durationSec comments shares saves collabWith
         creator { id username displayName avatarUrl avatarColor verified }
       }
@@ -413,6 +415,7 @@ const postFields = `
   caption
   views
   likes
+  isLiked
   hashtags
   audio
   visibility
@@ -465,6 +468,29 @@ export type PlaylistInput = {
   cover: string;
   itemLabel: string;
 };
+
+export type GraphQLLikeResult = {
+  liked: boolean;
+  likes: number;
+};
+
+export async function likePost(id: string): Promise<Result<GraphQLLikeResult>> {
+  const result = await graphqlRequestResult<{ likePost: GraphQLLikeResult }>(`
+    mutation LikePost($id: ID!) {
+      likePost(id: $id) { liked likes }
+    }
+  `, { id });
+  return result.ok ? { ok: true, value: result.value.likePost } : result;
+}
+
+export async function unlikePost(id: string): Promise<Result<GraphQLLikeResult>> {
+  const result = await graphqlRequestResult<{ unlikePost: GraphQLLikeResult }>(`
+    mutation UnlikePost($id: ID!) {
+      unlikePost(id: $id) { liked likes }
+    }
+  `, { id });
+  return result.ok ? { ok: true, value: result.value.unlikePost } : result;
+}
 
 export async function createPost(input: PostInput): Promise<GraphQLPost | null> {
   const data = await graphqlRequest<{ createPost: GraphQLPost }>(`

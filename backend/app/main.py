@@ -27,7 +27,7 @@ from slowapi.util import get_remote_address
 from backend.app.auth import get_user_profile, AuthContext
 from backend.app.auth_routes import create_auth_router
 from backend.app.database import get_session, run_migrations
-from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, Profile as DbProfile, Sound as DbSound, User
+from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, PostLike, Profile as DbProfile, Sound as DbSound, User
 from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
 from backend.app.media_routes import create_media_router
 from backend.app.profile_validation import (
@@ -38,7 +38,7 @@ from backend.app.profile_validation import (
     validate_website,
 )
 from backend.app.graphql_types import (
-    ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, Playlist,
+    ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, LikeResult, Playlist,
     PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SoundResult,
     UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
 )
@@ -78,11 +78,21 @@ def sound_to_graphql(sound: DbSound) -> SoundResult:
     )
 
 
-def post_to_graphql(post: DbPost) -> ContentItem:
+def is_post_liked(session, user_id: int | None, post_id: int) -> bool:
+    if user_id is None:
+        return False
+    return session.execute(
+        select(PostLike.id).where(PostLike.post_id == post_id, PostLike.user_id == user_id)
+    ).first() is not None
+
+
+def post_to_graphql(post: DbPost, viewer_id: int | None = None) -> ContentItem:
+    with get_session() as session:
+        liked = is_post_liked(session, viewer_id, post.id)
     return ContentItem(
         id=str(post.id), thumbnail=post.thumbnail, media_url=post.media_url,
         caption=post.caption or "", views=post.views, likes=post.likes,
-        collab_with=post.collab_with, hashtags=post.hashtags or [],
+        is_liked=liked, collab_with=post.collab_with, hashtags=post.hashtags or [],
         audio=post.audio or "Original Sound", visibility=post.visibility or "public",
         allow_comments=post.allow_comments if post.allow_comments is not None else True,
         allow_collabs=post.allow_collabs if post.allow_collabs is not None else True,
@@ -91,8 +101,8 @@ def post_to_graphql(post: DbPost) -> ContentItem:
     )
 
 
-def profile_to_graphql(profile: DbProfile, is_following: bool = False) -> Profile:
-    all_posts = [post_to_graphql(post) for post in profile.posts]
+def profile_to_graphql(profile: DbProfile, is_following: bool = False, viewer_id: int | None = None) -> Profile:
+    all_posts = [post_to_graphql(post, viewer_id=viewer_id) for post in profile.posts]
     page_size = 12
     recent_posts = all_posts[:page_size]
     playlists = [
@@ -227,11 +237,13 @@ def profile_visibility_filter(viewer_id: int | None):
     return or_(*visibility)
 
 
-def feed_item(post: DbPost, profile: DbProfile) -> FeedItem:
+def feed_item(post: DbPost, profile: DbProfile, viewer_id: int | None = None) -> FeedItem:
+    with get_session() as session:
+        liked = is_post_liked(session, viewer_id, post.id)
     return FeedItem(
         id=str(post.id), thumbnail=post.thumbnail, media_url=post.media_url,
         caption=post.caption or "", views=post.views, likes=post.likes,
-        collab_with=post.collab_with, hashtags=post.hashtags or [],
+        is_liked=liked, collab_with=post.collab_with, hashtags=post.hashtags or [],
         audio=post.audio or "Original Sound", visibility=post.visibility or "public",
         allow_comments=post.allow_comments if post.allow_comments is not None else True,
         allow_collabs=post.allow_collabs if post.allow_collabs is not None else True,
@@ -290,7 +302,7 @@ class Query:
             is_following = False
             if user_id is not None and user_id != profile.user_id:
                 is_following = is_following_profile(session, user_id, profile.user_id)
-            return profile_to_graphql(profile, is_following=is_following)
+            return profile_to_graphql(profile, is_following=is_following, viewer_id=user_id)
 
     @strawberry.field(name="searchProfiles")
     def search_profiles(self, query: str, info: Info, limit: int = 20) -> list[ProfileSummary]:
@@ -330,7 +342,7 @@ class Query:
             return [profile_summary(profile) for profile in profiles]
 
     @strawberry.field(name="searchPosts")
-    def search_posts(self, query: str, limit: int = 20) -> list[FeedItem]:
+    def search_posts(self, info: Info, query: str, limit: int = 20) -> list[FeedItem]:
         """Search published posts by caption, hashtag, audio, or creator."""
         terms = [term for term in query.strip().split() if term]
         if not terms:
@@ -354,7 +366,8 @@ class Query:
                 .order_by(DbPost.views.desc(), DbPost.id.desc())
                 .limit(page_size)
             ).all()
-            return [feed_item(post, profile) for post, profile in rows]
+            viewer_id = info.context.get("user_id")
+            return [feed_item(post, profile, viewer_id=viewer_id) for post, profile in rows]
 
     @strawberry.field(name="searchHashtags")
     def search_hashtags(self, query: str, limit: int = 20) -> list[HashtagResult]:
@@ -416,7 +429,7 @@ class Query:
             page = ordered[offset:offset + page_size]
             has_more = offset + page_size < len(ordered)
             return PostPage(
-                items=[post_to_graphql(post) for post in page],
+                items=[post_to_graphql(post, viewer_id=user_id) for post in page],
                 next_cursor=str(offset + page_size) if has_more else None,
             )
 
@@ -447,7 +460,7 @@ class Query:
             has_more = len(ordered) > page_size
             page = ordered[:page_size]
             return PostPage(
-                items=[post_to_graphql(post) for post in page],
+                items=[post_to_graphql(post, viewer_id=viewer_id) for post in page],
                 next_cursor=str(offset + page_size) if has_more else None,
             )
 
@@ -619,7 +632,7 @@ class Query:
             has_more = len(rows) > page_size
             rows = rows[:page_size]
             return FeedPage(
-                items=[feed_item(post, profile) for post, profile in rows],
+                items=[feed_item(post, profile, viewer_id=viewer_id) for post, profile in rows],
                 next_cursor=str(offset + page_size) if has_more else None,
             )
 
@@ -688,6 +701,54 @@ class Mutation:
             session.commit()
             session.refresh(profile)
             return profile_to_graphql(profile)
+
+    @strawberry.mutation(name="likePost")
+    def like_post(self, id: strawberry.ID, info: Info) -> LikeResult:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to like a post", "UNAUTHENTICATED", 401)
+
+        post_id = parse_int_id(id, "Post ID")
+        with get_session() as session:
+            post = session.execute(select(DbPost).where(DbPost.id == post_id)).scalar_one_or_none()
+            if post is None:
+                raise api_error("Post not found", "NOT_FOUND", 404)
+
+            existing = session.execute(
+                select(PostLike).where(PostLike.post_id == post_id, PostLike.user_id == user_id)
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(PostLike(post_id=post_id, user_id=user_id))
+                post.likes = max(0, post.likes + 1)
+                session.commit()
+                session.refresh(post)
+                return LikeResult(liked=True, likes=post.likes)
+
+            return LikeResult(liked=True, likes=post.likes)
+
+    @strawberry.mutation(name="unlikePost")
+    def unlike_post(self, id: strawberry.ID, info: Info) -> LikeResult:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to unlike a post", "UNAUTHENTICATED", 401)
+
+        post_id = parse_int_id(id, "Post ID")
+        with get_session() as session:
+            post = session.execute(select(DbPost).where(DbPost.id == post_id)).scalar_one_or_none()
+            if post is None:
+                raise api_error("Post not found", "NOT_FOUND", 404)
+
+            existing = session.execute(
+                select(PostLike).where(PostLike.post_id == post_id, PostLike.user_id == user_id)
+            ).scalar_one_or_none()
+            if existing is not None:
+                session.delete(existing)
+                post.likes = max(0, post.likes - 1)
+                session.commit()
+                session.refresh(post)
+                return LikeResult(liked=False, likes=post.likes)
+
+            return LikeResult(liked=False, likes=post.likes)
 
     @strawberry.mutation
     def follow(self, username: str, info: Info) -> FollowResult:
@@ -772,7 +833,7 @@ class Mutation:
             session.add(post)
             session.commit()
             session.refresh(post)
-            return post_to_graphql(post)
+            return post_to_graphql(post, viewer_id=profile.user_id)
 
     @strawberry.mutation(name="updatePost")
     def update_post(self, id: strawberry.ID, input: UpdatePostInput, info: Info) -> ContentItem:
@@ -802,7 +863,7 @@ class Mutation:
                 post.duration_sec = input.duration_sec
             session.commit()
             session.refresh(post)
-            return post_to_graphql(post)
+            return post_to_graphql(post, viewer_id=profile.user_id)
 
     @strawberry.mutation(name="deletePost")
     def delete_post(self, id: strawberry.ID, info: Info) -> bool:

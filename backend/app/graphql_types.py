@@ -10,6 +10,7 @@ class ContentItem:
     caption: str
     views: int
     likes: int
+    is_liked: bool = strawberry.field(name="isLiked", default=False)
     media_url: str | None = strawberry.field(name="mediaUrl", default=None)
     collab_with: str | None = strawberry.field(name="collabWith")
     hashtags: list[str] = strawberry.field(default_factory=list)
@@ -21,6 +22,12 @@ class ContentItem:
     comments: int = 0
     shares: int = 0
     saves: int = 0
+
+
+@strawberry.type
+class LikeResult:
+    liked: bool
+    likes: int
 
 
 @strawberry.type
@@ -64,6 +71,7 @@ class FeedItem:
     caption: str
     views: int
     likes: int
+    is_liked: bool = strawberry.field(name="isLiked", default=False)
     collab_with: str | None = strawberry.field(name="collabWith", default=None)
     hashtags: list[str] = strawberry.field(default_factory=list)
     audio: str = "Original Sound"

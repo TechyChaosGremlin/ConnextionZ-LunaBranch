@@ -198,7 +198,37 @@ def main():
     ))["unfollow"]
     assert duplicate_unfollow == {"following": False, "followers": 0, "followingCount": 0}
 
-    print("6. Delete account")
+    print("6. Like and unlike a post")
+    feed_query = """
+        query { feed(limit: 3) { items { id likes isLiked caption } } }
+    """
+    feed = assert_graphql_success(graphql(authenticated, feed_query))["feed"]
+    assert feed["items"], feed
+    target_post = next(item for item in feed["items"] if item["id"])
+
+    like_query = """
+        mutation LikePost($id: ID!) {
+          likePost(id: $id) { liked likes }
+        }
+    """
+    liked = assert_graphql_success(graphql(authenticated, like_query, {"id": target_post["id"]}))["likePost"]
+    assert liked["liked"] is True
+    assert liked["likes"] == target_post["likes"] + 1
+
+    refreshed = assert_graphql_success(graphql(authenticated, feed_query))["feed"]
+    refreshed_post = next(item for item in refreshed["items"] if item["id"] == target_post["id"])
+    assert refreshed_post["isLiked"] is True
+
+    unlike_query = """
+        mutation UnlikePost($id: ID!) {
+          unlikePost(id: $id) { liked likes }
+        }
+    """
+    unliked = assert_graphql_success(graphql(authenticated, unlike_query, {"id": target_post["id"]}))["unlikePost"]
+    assert unliked["liked"] is False
+    assert unliked["likes"] == target_post["likes"]
+
+    print("7. Delete account")
     deleted = request_json(authenticated, "/auth/delete-account", {})
     assert deleted["ok"] is True
 
@@ -216,7 +246,7 @@ def main():
     ))["profile"]
     assert deleted_profile is None
 
-    print("7. Reject protected requests")
+    print("8. Reject protected requests")
 
     protected_update = graphql(anonymous, update_query, {"input": {"bio": "must fail"}})
     assert protected_update.get("errors"), protected_update
@@ -225,9 +255,9 @@ def main():
     protected_follow = graphql(anonymous, follow_query, {"username": "luna"})
     assert protected_follow.get("errors"), protected_follow
 
-    print("8. Reject duplicate email and username")
+    print("9. Reject duplicate email and username")
     duplicate_email = request_json(anonymous, "/auth/register", {
-        "email": email,
+        "email": target_email,
         "password": password,
         "username": f"other_email_{suffix}",
         "display_name": "Duplicate Email",
@@ -237,7 +267,7 @@ def main():
     duplicate_username = request_json(anonymous, "/auth/register", {
         "email": f"other.username.{suffix}@connextionz.app",
         "password": password,
-        "username": username,
+        "username": target_username,
         "display_name": "Duplicate Username",
     }, expected_status=409)
     assert "detail" in duplicate_username
