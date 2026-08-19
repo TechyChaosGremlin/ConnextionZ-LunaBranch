@@ -26,11 +26,12 @@ import { ContentGrid, CreatorRow, SegmentedTabs, Thumb, formatCount } from "./pr
 import {
   type HashtagResult, type SearchResults, EMPTY_RESULTS,
   clearSearches, forgetSearch, recentSearches, rememberSearch, search,
-  suggestedCreators, totalResults, trendingHashtags,
+  totalResults, trendingHashtags,
 } from "./search";
 import { type Sound } from "./TrendingSounds";
 import { fetchSuggestedProfiles } from "./profile-graphql";
 import { registerCreator } from "./creators";
+import { noteFollowState } from "./follow-store";
 
 type Status = "idle" | "loading" | "ready" | "error";
 type Tab = "top" | "creators" | "videos" | "sounds" | "tags";
@@ -257,11 +258,16 @@ function DiscoverPanel({
   useEffect(() => {
     let active = true;
     fetchSuggestedProfiles(6).then((profiles) => {
-      if (active && profiles) setRemoteSuggestions(profiles.map(registerCreator));
+      if (active && profiles) {
+        profiles.forEach((p) => {
+          if (p.isFollowing != null) noteFollowState(p.id, p.isFollowing);
+        });
+        setRemoteSuggestions(profiles.map(registerCreator));
+      }
     });
     return () => { active = false; };
   }, []);
-  const suggestions = remoteSuggestions ?? suggestedCreators(6);
+  const suggestions = remoteSuggestions ?? [];
   const tags = useMemo(() => trendingHashtags(), []);
 
   return (

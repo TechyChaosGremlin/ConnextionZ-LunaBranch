@@ -28,7 +28,7 @@ import { useMemo, useSyncExternalStore } from "react";
 import { type Result } from "./auth-store";
 import { type ContentItem, type FeedVideo, OWN_POSTS } from "./creators";
 import { type MediaKind, type PickedMedia, capturePoster } from "./media-upload";
-import { createPost as createBackendPost, uploadMediaFile } from "./profile-graphql";
+import { createPost as createBackendPost, uploadPostMediaFile } from "./profile-graphql";
 
 const POSTS_KEY = "connextionz.posts";
 
@@ -251,16 +251,16 @@ export async function publishPost(
 
   const uploadedMedia = await fetch(media.url)
     .then((response) => response.blob())
-    .then((blob) => uploadMediaFile(blob, media.name));
+    .then((blob) => uploadPostMediaFile(blob, media.name));
   const uploadedPoster = poster
-    ? await fetch(poster).then((response) => response.blob()).then((blob) => uploadMediaFile(blob, "poster.jpg"))
+    ? await fetch(poster).then((response) => response.blob()).then((blob) => uploadPostMediaFile(blob, "poster.jpg"))
     : null;
 
   const post: OwnPost = {
     id: uid(),
     kind: media.kind,
     createdAt: Date.now(),
-    thumbnail: uploadedPoster ?? poster ?? "",
+    thumbnail: uploadedPoster?.url ?? poster ?? "",
     caption: draft.caption.trim(),
     hashtags: draft.hashtags,
     audio: draft.audio.trim() || "Original Sound",
@@ -273,13 +273,13 @@ export async function publishPost(
     comments: 0,
     shares: 0,
     saves: 0,
-    mediaUrl: uploadedMedia ?? uploaded.value,
+    mediaUrl: uploadedMedia?.url ?? uploaded.value,
     ...(draft.collabWith ? { collabWith: draft.collabWith } : {}),
   };
 
   const backendPost = uploadedMedia && uploadedPoster ? await createBackendPost({
-    thumbnail: uploadedPoster,
-    mediaUrl: uploadedMedia,
+    mediaId: uploadedMedia.id,
+    thumbnailMediaId: uploadedPoster.id,
     caption: post.caption,
     hashtags: post.hashtags,
     audio: post.audio,

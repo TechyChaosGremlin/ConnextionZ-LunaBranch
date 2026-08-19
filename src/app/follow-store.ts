@@ -17,7 +17,7 @@
 import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
 import { type Result } from "./auth-store";
 import { registerCreator, type Creator, creatorById } from "./creators";
-import { fetchMyFollowing, followProfile, unfollowProfile } from "./profile-graphql";
+import { fetchMyFollowing, followProfile, type GraphQLFollowResult, unfollowProfile } from "./profile-graphql";
 
 // ─── STATE ───────────────────────────────────────────────────────────────────
 
@@ -26,6 +26,13 @@ let activeEmail: string | null = null;
 let following = new Set<string>();
 /** In-flight toggles, so every button for a creator shows the same pending state. */
 let pending = new Set<string>();
+/**
+ * The backend's follower count for a creator, keyed by id, excluding the
+ * viewer's own follow — same convention as `Creator.followers` — so it can
+ * replace the seeded/stale count the instant a follow mutation resolves,
+ * without waiting on a profile refetch.
+ */
+let followerCounts = new Map<string, number>();
 
 const listeners = new Set<() => void>();
 
@@ -54,6 +61,7 @@ export function activateFollowGraph(email: string | null) {
     activeEmail = null;
     following = new Set();
     pending = new Set();
+    followerCounts = new Map();
     publish();
     return;
   }
@@ -61,6 +69,7 @@ export function activateFollowGraph(email: string | null) {
   activeEmail = email.trim().toLowerCase();
   following = new Set();
   pending = new Set();
+  followerCounts = new Map();
   publish();
   void fetchMyFollowing().then((profiles) => {
     if (profiles === null || activeEmail !== email.trim().toLowerCase()) return;
@@ -75,18 +84,34 @@ export const isFollowing = (creatorId: string) => following.has(creatorId);
 
 export const followingIds = () => idsSnapshot;
 
+/**
+ * Folds a per-row `isFollowing` value from the API (search results, connections
+ * lists) into the graph, so a creator seen for the first time outside the
+ * initial sign-in fetch still shows the right button without waiting on a
+ * separate full-list request. No-op when signed out — there is no graph to
+ * merge server truth into.
+ */
+export function noteFollowState(creatorId: string, value: boolean) {
+  if (!activeEmail || following.has(creatorId) === value) return;
+  following = new Set(following);
+  value ? following.add(creatorId) : following.delete(creatorId);
+  publish();
+}
+
+/** Folds a follower count fresh off the wire into the graph — see `followerCounts`. */
+function applyFollowerCount(creatorId: string, followersExcludingViewer: number) {
+  followerCounts = new Map(followerCounts);
+  followerCounts.set(creatorId, followersExcludingViewer);
+  publish();
+}
+
 // ─── WRITES ──────────────────────────────────────────────────────────────────
 
 /** The network seam. Resolves once the follow is durable. */
-async function requestFollow(creatorId: string, next: boolean): Promise<Result<boolean>> {
+async function requestFollow(creatorId: string, next: boolean): Promise<Result<GraphQLFollowResult>> {
   if (!activeEmail) return { ok: false, error: "Sign in to follow creators." };
   const identifier = creatorById(creatorId)?.username ?? creatorId;
-  const backendResult = next
-    ? await followProfile(identifier)
-    : await unfollowProfile(identifier);
-  if (backendResult !== null) return { ok: true, value: backendResult };
-
-  return { ok: false, error: "Could not reach the follow service. Try again." };
+  return next ? followProfile(identifier) : unfollowProfile(identifier);
 }
 
 /**
@@ -114,9 +139,15 @@ export async function toggleFollow(creatorId: string): Promise<Result<boolean>> 
     // Roll back to what the server still believes.
     following = new Set(following);
     previous ? following.add(creatorId) : following.delete(creatorId);
+    publish();
+    return result;
   }
+
+  // The server's counts are authoritative — apply them now instead of waiting
+  // on whatever refetch might happen next.
+  applyFollowerCount(creatorId, result.value.followers - (result.value.following ? 1 : 0));
   publish();
-  return result;
+  return { ok: true, value: result.value.following };
 }
 
 // ─── HOOKS ───────────────────────────────────────────────────────────────────
@@ -137,11 +168,13 @@ export function useFollowingCount(): number {
 /**
  * A creator's follower count with the viewer's own follow layered on top.
  * `creator.followers` excludes the viewer, so following adds exactly one and
- * the number moves the moment the button is pressed.
+ * the number moves the moment the button is pressed. Once a follow mutation
+ * for this creator has resolved, the server's own count takes over instead.
  */
 export function useFollowerCount(creator: Pick<Creator, "id" | "followers">): number {
   const followed = useIsFollowing(creator.id);
-  return creator.followers + (followed ? 1 : 0);
+  const authoritative = useSyncExternalStore(subscribe, () => followerCounts.get(creator.id));
+  return (authoritative ?? creator.followers) + (followed ? 1 : 0);
 }
 
 /**

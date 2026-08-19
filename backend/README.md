@@ -32,8 +32,10 @@ bcrypt was enabled are upgraded automatically after their next successful login.
 Uploaded avatars and post media are stored outside the database under `MEDIA_ROOT`
 and served as URLs under `/media/`. Set `MEDIA_ROOT` to an object-storage mount
 or replace `store_upload` with an S3-compatible client for deployment. The API
-accepts authenticated multipart uploads at `/api/media/upload`; SQL stores only
-the returned avatar, poster, and post media URLs.
+accepts authenticated multipart uploads at `/api/media/upload`. Each post-media
+upload is recorded with its authenticated owner and returns `{ id, url,
+contentType }`. Create posts with the owned `mediaId` and `thumbnailMediaId`;
+the server resolves the URLs and does not accept client-supplied media URLs.
 
 For AWS S3, set these variables and provide AWS credentials through the normal
 AWS credential chain (environment variables, profile, or IAM role):
@@ -151,6 +153,9 @@ query MyContent {
 mutation CreatePost($input: PostInput!) {
   createPost(input: $input) { id thumbnail caption views likes collabWith }
 }
+
+# $input must include mediaId and thumbnailMediaId returned by /api/media/upload.
+# Both records must belong to the authenticated user; thumbnailMediaId must be an image.
 
 mutation CreatePlaylist($input: PlaylistInput!) {
   createPlaylist(input: $input) { id title cover itemLabel plays }

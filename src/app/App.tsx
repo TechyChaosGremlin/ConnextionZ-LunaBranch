@@ -4,9 +4,9 @@ import { type SettingsRoute } from "./SettingsPages";
 import { type Account, getSession, endSession, profileOf } from "./auth-store";
 import { GoLiveSetup, CreatorLiveView, ViewerLiveView, LiveBannerStrip } from "./LiveStream";
 import { ThemeContext, useTheme } from "./ThemeContext";
-import { type Creator, type FeedVideo, OWN_STATS, creatorById, creatorByUsername, identityOf } from "./creators";
+import { type Creator, type FeedVideo, OWN_STATS, creatorById, identityOf } from "./creators";
 import { fetchProfileByUsername } from "./profile-graphql";
-import { activateFollowGraph, useFollow, useFollowingIds } from "./follow-store";
+import { activateFollowGraph, noteFollowState, useFollow, useFollowingIds } from "./follow-store";
 import { SessionProvider } from "./session";
 import { ProfileScreen, useOwnCreator } from "./Profile";
 import { Avatar, CollabScorePill, ViewerAvatar, VerifiedBadge, formatCount } from "./profile-ui";
@@ -953,15 +953,10 @@ export default function App() {
     }
 
     const username = profileStack[profileStack.length - 1];
-    const localCreator = creatorByUsername(username);
-    if (localCreator) {
-      setVisitedCreator(localCreator);
-      return;
-    }
-
     let active = true;
     fetchProfileByUsername(username).then((profile) => {
       if (!active || !profile) return;
+      if (profile.isFollowing != null) noteFollowState(profile.id, profile.isFollowing);
       setVisitedCreator({
         id: profile.id,
         username: profile.username,

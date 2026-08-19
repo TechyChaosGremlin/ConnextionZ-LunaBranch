@@ -349,7 +349,19 @@ export function registerCreator(input: {
 }): Creator {
   const username = input.username.trim().replace(/^@/, "").toLowerCase();
   const existingByUsername = BY_USERNAME.get(username);
-  if (existingByUsername) return existingByUsername;
+  if (existingByUsername) {
+    existingByUsername.username = input.username;
+    existingByUsername.displayName = input.displayName || input.username;
+    existingByUsername.avatarUrl = input.avatarUrl ?? existingByUsername.avatarUrl;
+    existingByUsername.avatarColor = input.avatarColor ?? existingByUsername.avatarColor;
+    existingByUsername.verified = input.verified ?? existingByUsername.verified;
+    existingByUsername.collabScore = input.collabScore ?? existingByUsername.collabScore;
+    existingByUsername.collabCount = input.collabCount ?? existingByUsername.collabCount;
+    existingByUsername.followers = input.followers ?? existingByUsername.followers;
+    existingByUsername.following = input.following ?? existingByUsername.following;
+    existingByUsername.openToCollab = input.openToCollab ?? existingByUsername.openToCollab;
+    return existingByUsername;
+  }
 
   const existingById = BY_ID.get(input.id);
   const id = existingById && existingById.username !== username

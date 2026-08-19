@@ -1,4 +1,5 @@
 // ─── ACCOUNT STORE ───────────────────────────────────────────────────────────
+import { BACKEND_API_URL } from "./api-config";
 import { updateMeProfile, uploadMediaFile } from "./profile-graphql";
 //
 // ⚠️  PROTOTYPE CREDENTIAL STUB — THIS IS NOT AUTHENTICATION.
@@ -163,7 +164,6 @@ function write(key: string, value: unknown): boolean {
 // These functions try to use the Python backend API. If unavailable, they
 // fall back to the prototype localStorage-based auth.
 
-const BACKEND_API_URL = import.meta.env.VITE_API_URL || "http://127.0.0.1:8002";
 
 async function tryBackendSignIn(email: string, password: string): Promise<Result<Account> | null> {
   try {
@@ -489,7 +489,7 @@ export async function updateProfile(
   let avatarUrl = patch.avatarUrl;
   if (avatarUrl?.startsWith("data:")) {
     const avatarBlob = await fetch(avatarUrl).then((response) => response.blob());
-    const uploadedAvatar = await uploadMediaFile(avatarBlob, "avatar.webp");
+    const uploadedAvatar = await uploadMediaFile(avatarBlob, "avatar.webp", "avatar");
     if (!uploadedAvatar) {
       return { ok: false, error: "The profile photo could not be uploaded. Try again." };
     }

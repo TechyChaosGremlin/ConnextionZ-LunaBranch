@@ -19,6 +19,7 @@
 
 import { type Result } from "./auth-store";
 import { CREATORS, FEED, registerCreator, type Creator, type FeedVideo, creatorById } from "./creators";
+import { noteFollowState } from "./follow-store";
 import { SOUNDS, type Sound } from "./TrendingSounds";
 import { ownFeedVideos } from "./posts-store";
 import { searchHashtags, searchPosts, searchProfiles } from "./profile-graphql";
@@ -94,7 +95,7 @@ function run(query: string, remoteCreators?: Creator[]): SearchResults {
   const words = terms(query);
   if (!words.length) return EMPTY_RESULTS;
 
-  const creators = (remoteCreators ?? CREATORS).filter((c) =>
+  const creators = (remoteCreators ?? []).filter((c) =>
     matches(`${c.username} ${c.displayName} ${c.bio} ${c.location} ${c.collabStatus}`, words),
   ).sort((a, b) => {
     // An exact handle beats a bio mention, however popular the bio's owner is.
@@ -128,7 +129,10 @@ export async function search(query: string): Promise<Result<SearchResults>> {
   }
   if (!normalise(query)) return { ok: true, value: EMPTY_RESULTS };
   const remoteProfiles = await searchProfiles(query);
-  const remoteCreators = remoteProfiles?.map(registerCreator);
+  const remoteCreators = remoteProfiles?.map((p) => {
+    if (p.isFollowing != null) noteFollowState(p.id, p.isFollowing);
+    return registerCreator(p);
+  });
   const remotePosts = await searchPosts(query);
   const remoteHashtags = await searchHashtags(query);
   const results = run(query, remoteCreators);

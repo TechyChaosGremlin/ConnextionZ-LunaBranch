@@ -27,7 +27,7 @@ from slowapi.util import get_remote_address
 
 from backend.app.auth import authenticate_user, register_user, get_user_profile, AuthContext
 from backend.app.database import get_session
-from backend.app.models import Follow, Playlist as DbPlaylist, Post as DbPost, Profile as DbProfile, Sound as DbSound, User
+from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, Profile as DbProfile, Sound as DbSound, User
 from backend.app.seed import seed_database
 from backend.app.storage import MediaStorage
 
@@ -38,6 +38,17 @@ MAX_AVATAR_BYTES = 8 * 1024 * 1024
 MAX_MEDIA_BYTES = 512 * 1024 * 1024
 AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
 MEDIA_TYPES = AVATAR_TYPES | {"video/mp4", "video/webm", "video/quicktime", "video/ogg"}
+CONTENT_TYPE_EXTENSIONS = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+    "image/gif": ".gif",
+    "video/mp4": ".mp4",
+    "video/webm": ".webm",
+    "video/quicktime": ".mov",
+    "video/ogg": ".ogv",
+}
+SIGNATURE_BYTES = 64 * 1024
 media_storage = MediaStorage(MEDIA_ROOT)
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
@@ -46,8 +57,46 @@ logging.basicConfig(
 logger = logging.getLogger("connextionz.api")
 
 
+def detect_media_type(header: bytes) -> str | None:
+    """Return a supported MIME type based on file bytes, never request metadata."""
+    if header.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if header.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if header.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
+        return "image/webp"
+    if header.startswith(b"\x1a\x45\xdf\xa3") and b"webm" in header:
+        return "video/webm"
+    if header.startswith(b"OggS") and b"theora" in header:
+        return "video/ogg"
+    if header[4:8] == b"ftyp":
+        major_brand = header[8:12]
+        if major_brand == b"qt  ":
+            return "video/quicktime"
+        if major_brand in {b"isom", b"iso2", b"mp41", b"mp42", b"avc1", b"M4V ", b"MSNV"}:
+            return "video/mp4"
+    return None
+
+
 def api_error(message: str, code: str, status_code: int) -> GraphQLError:
     return GraphQLError(message, extensions={"code": code, "statusCode": status_code})
+
+
+def parse_int_id(raw_id: object, field_name: str = "ID") -> int:
+    if raw_id is None:
+        raise api_error(f"{field_name} is required", "VALIDATION_ERROR", 400)
+
+    value = str(raw_id).strip()
+    if not value or not re.fullmatch(r"\d+", value):
+        raise api_error(f"Invalid {field_name}: expected a numeric ID", "VALIDATION_ERROR", 400)
+
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise api_error(f"Invalid {field_name}: expected a numeric ID", "VALIDATION_ERROR", 400) from exc
+
 
 seed_database()
 
@@ -94,6 +143,7 @@ class ProfileSummary:
     followers: int = 0
     following: int = 0
     open_to_collab: bool = strawberry.field(name="openToCollab", default=True)
+    is_following: bool = strawberry.field(name="isFollowing", default=False)
 
 
 @strawberry.type
@@ -171,8 +221,8 @@ def sound_to_graphql(sound: DbSound) -> SoundResult:
 
 @strawberry.input
 class PostInput:
-    thumbnail: str
-    media_url: str | None = strawberry.field(name="mediaUrl", default=None)
+    media_id: strawberry.ID = strawberry.field(name="mediaId")
+    thumbnail_media_id: strawberry.ID = strawberry.field(name="thumbnailMediaId")
     caption: str | None = None
     collab_with: str | None = strawberry.field(name="collabWith", default=None)
     hashtags: list[str] = strawberry.field(default_factory=list)
@@ -192,8 +242,6 @@ class PlaylistInput:
 
 @strawberry.input
 class UpdatePostInput:
-    thumbnail: str | None = None
-    media_url: str | None = strawberry.field(name="mediaUrl", default=None)
     caption: str | None = None
     collab_with: str | None = strawberry.field(name="collabWith", default=None)
     hashtags: list[str] | None = None
@@ -322,23 +370,41 @@ def owner_profile(session, info: Info) -> DbProfile:
     return profile
 
 
-def profile_summary(profile: DbProfile) -> ProfileSummary:
+def owned_media(session, user_id: int, media_id: object, field_name: str) -> DbMedia:
+    record_id = parse_int_id(media_id, field_name)
+    media = session.execute(
+        select(DbMedia).where(DbMedia.id == record_id, DbMedia.user_id == user_id)
+    ).scalar_one_or_none()
+    if media is None:
+        raise api_error("Media not found", "NOT_FOUND", 404)
+    return media
+
+
+def profile_summary(profile: DbProfile, is_following: bool = False) -> ProfileSummary:
     return ProfileSummary(
         id=str(profile.id), username=profile.username,
         display_name=profile.display_name, avatar_url=profile.avatar_url or "",
         avatar_color=profile.avatar_color or "#00AEEF", verified=profile.verified,
         collab_score=profile.collab_score, collab_count=profile.collab_count,
         followers=profile.followers, following=profile.following,
-        open_to_collab=profile.open_to_collab,
+        open_to_collab=profile.open_to_collab, is_following=is_following,
     )
 
 
 def find_profile(session, identifier: str) -> DbProfile | None:
     identifier = identifier.strip()
-    statement = select(DbProfile).where(DbProfile.username == identifier)
-    if identifier.isdigit():
-        statement = select(DbProfile).where(DbProfile.id == int(identifier))
-    return session.execute(statement).scalar_one_or_none()
+    profile = session.execute(
+        select(DbProfile).where(DbProfile.username == identifier)
+    ).scalar_one_or_none()
+    if profile is not None or not identifier.isdigit():
+        return profile
+    try:
+        numeric_id = int(identifier)
+    except (TypeError, ValueError):
+        return profile
+    return session.execute(
+        select(DbProfile).where(DbProfile.id == numeric_id)
+    ).scalar_one_or_none()
 
 
 def feed_item(post: DbPost, profile: DbProfile) -> FeedItem:
@@ -567,15 +633,35 @@ class Query:
 
     @strawberry.field(name="myFollowersPage")
     def my_followers_page(self, info: Info, after: str | None = None, limit: int = 20) -> ProfilePage:
-        return Query._follow_page(info.context.get("user_id"), True, after, limit)
+        user_id = info.context.get("user_id")
+        return Query._follow_page(user_id, True, after, limit, viewer_id=user_id)
 
     @strawberry.field(name="myFollowingPage")
     def my_following_page(self, info: Info, after: str | None = None, limit: int = 20) -> ProfilePage:
-        return Query._follow_page(info.context.get("user_id"), False, after, limit)
+        user_id = info.context.get("user_id")
+        return Query._follow_page(user_id, False, after, limit, viewer_id=user_id)
+
+    @strawberry.field(name="followersPage")
+    def followers_page(self, username: str, info: Info, after: str | None = None, limit: int = 20) -> ProfilePage:
+        with get_session() as session:
+            profile = find_profile(session, username)
+            if profile is None:
+                return ProfilePage(profiles=[], next_cursor=None)
+            user_id = profile.user_id
+        return Query._follow_page(user_id, True, after, limit, viewer_id=info.context.get("user_id"))
+
+    @strawberry.field(name="followingPage")
+    def following_page(self, username: str, info: Info, after: str | None = None, limit: int = 20) -> ProfilePage:
+        with get_session() as session:
+            profile = find_profile(session, username)
+            if profile is None:
+                return ProfilePage(profiles=[], next_cursor=None)
+            user_id = profile.user_id
+        return Query._follow_page(user_id, False, after, limit, viewer_id=info.context.get("user_id"))
 
     @staticmethod
     def _follow_page(
-        user_id: int | None, incoming: bool, after: str | None, limit: int,
+        user_id: int | None, incoming: bool, after: str | None, limit: int, viewer_id: int | None = None,
     ) -> ProfilePage:
         if user_id is None:
             return ProfilePage(profiles=[], next_cursor=None)
@@ -596,8 +682,20 @@ class Query:
                 .limit(page_size + 1)
             ).scalars().all()
             has_more = len(rows) > page_size
+            rows = rows[:page_size]
+            following_ids: set[int] = set()
+            if viewer_id is not None and rows:
+                following_ids = set(session.execute(
+                    select(Follow.following_id).where(
+                        Follow.follower_id == viewer_id,
+                        Follow.following_id.in_([row.user_id for row in rows]),
+                    )
+                ).scalars().all())
             return ProfilePage(
-                profiles=[profile_summary(profile) for profile in rows[:page_size]],
+                profiles=[
+                    profile_summary(profile, is_following=profile.user_id in following_ids)
+                    for profile in rows
+                ],
                 next_cursor=str(offset + page_size) if has_more else None,
             )
 
@@ -738,10 +836,16 @@ class Mutation:
     def create_post(self, input: PostInput, info: Info) -> ContentItem:
         with get_session() as session:
             profile = owner_profile(session, info)
+            media = owned_media(session, profile.user_id, input.media_id, "Media ID")
+            thumbnail_media = owned_media(session, profile.user_id, input.thumbnail_media_id, "Thumbnail media ID")
+            if not thumbnail_media.content_type.startswith("image/"):
+                raise api_error("Thumbnail must be an image", "VALIDATION_ERROR", 400)
             post = DbPost(
                 profile_id=profile.id,
-                thumbnail=input.thumbnail,
-                media_url=input.media_url,
+                thumbnail=thumbnail_media.url,
+                media_url=media.url,
+                media_id=media.id,
+                thumbnail_media_id=thumbnail_media.id,
                 caption=input.caption,
                 collab_with=input.collab_with,
                 hashtags=input.hashtags,
@@ -760,15 +864,12 @@ class Mutation:
     def update_post(self, id: strawberry.ID, input: UpdatePostInput, info: Info) -> ContentItem:
         with get_session() as session:
             profile = owner_profile(session, info)
+            post_id = parse_int_id(id, "Post ID")
             post = session.execute(
-                select(DbPost).where(DbPost.id == int(id), DbPost.profile_id == profile.id)
+                select(DbPost).where(DbPost.id == post_id, DbPost.profile_id == profile.id)
             ).scalar_one_or_none()
             if post is None:
                 raise api_error("Post not found", "NOT_FOUND", 404)
-            if input.thumbnail is not None:
-                post.thumbnail = input.thumbnail
-            if input.media_url is not None:
-                post.media_url = input.media_url
             if input.caption is not None:
                 post.caption = input.caption
             if input.collab_with is not None:
@@ -793,8 +894,9 @@ class Mutation:
     def delete_post(self, id: strawberry.ID, info: Info) -> bool:
         with get_session() as session:
             profile = owner_profile(session, info)
+            post_id = parse_int_id(id, "Post ID")
             post = session.execute(
-                select(DbPost).where(DbPost.id == int(id), DbPost.profile_id == profile.id)
+                select(DbPost).where(DbPost.id == post_id, DbPost.profile_id == profile.id)
             ).scalar_one_or_none()
             if post is None:
                 return False
@@ -822,9 +924,10 @@ class Mutation:
     def update_playlist(self, id: strawberry.ID, input: UpdatePlaylistInput, info: Info) -> Playlist:
         with get_session() as session:
             profile = owner_profile(session, info)
+            playlist_id = parse_int_id(id, "Playlist ID")
             playlist = session.execute(
                 select(DbPlaylist).where(
-                    DbPlaylist.id == int(id), DbPlaylist.profile_id == profile.id
+                    DbPlaylist.id == playlist_id, DbPlaylist.profile_id == profile.id
                 )
             ).scalar_one_or_none()
             if playlist is None:
@@ -846,9 +949,10 @@ class Mutation:
     def delete_playlist(self, id: strawberry.ID, info: Info) -> bool:
         with get_session() as session:
             profile = owner_profile(session, info)
+            playlist_id = parse_int_id(id, "Playlist ID")
             playlist = session.execute(
                 select(DbPlaylist).where(
-                    DbPlaylist.id == int(id), DbPlaylist.profile_id == profile.id
+                    DbPlaylist.id == playlist_id, DbPlaylist.profile_id == profile.id
                 )
             ).scalar_one_or_none()
             if playlist is None:
@@ -937,6 +1041,7 @@ app.add_middleware(SlowAPIMiddleware)
 async def request_logging(request: Request, call_next):
     started = time.perf_counter()
     response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
     elapsed_ms = (time.perf_counter() - started) * 1000
     logger.info(
         "request method=%s path=%s status=%s duration_ms=%.1f client=%s",
@@ -952,40 +1057,57 @@ app.include_router(graphql_app, prefix="/graphql")
 
 
 async def store_upload(upload: UploadFile, allowed_types: set[str], max_bytes: int) -> tuple[str, str]:
-    if upload.content_type not in allowed_types:
-        raise HTTPException(status_code=415, detail="Unsupported media type")
-
-    suffix = Path(upload.filename or "").suffix.lower()
-    if not suffix or len(suffix) > 10:
-        suffix = ".bin"
-    filename = f"{uuid.uuid4().hex}{suffix}"
     temporary_file = MEDIA_ROOT / f".upload-{uuid.uuid4().hex}.tmp"
     size = 0
+    header = bytearray()
     try:
         with temporary_file.open("wb") as output:
             while chunk := await upload.read(1024 * 1024):
                 size += len(chunk)
                 if size > max_bytes:
                     raise HTTPException(status_code=413, detail="Uploaded file is too large")
+                if len(header) < SIGNATURE_BYTES:
+                    header.extend(chunk[:SIGNATURE_BYTES - len(header)])
                 output.write(chunk)
+
+        content_type = detect_media_type(bytes(header))
+        if content_type is None or content_type not in allowed_types:
+            raise HTTPException(status_code=415, detail="Unsupported or invalid media file")
+
+        filename = f"{uuid.uuid4().hex}{CONTENT_TYPE_EXTENSIONS[content_type]}"
         with temporary_file.open("rb") as source:
-            url = media_storage.save(source, filename, upload.content_type or "application/octet-stream")
+            url = media_storage.save(source, filename, content_type)
     except Exception:
         temporary_file.unlink(missing_ok=True)
         raise
     finally:
         temporary_file.unlink(missing_ok=True)
         await upload.close()
-    return url, upload.content_type or "application/octet-stream"
+    return url, content_type
+
+
+@app.post("/api/avatar/upload")
+@limiter.limit("30/minute")
+async def upload_avatar(request: Request, file: UploadFile = File(...)):
+    if request.session.get("user_id") is None:
+        raise HTTPException(status_code=401, detail="Must be logged in to upload an avatar")
+    url, content_type = await store_upload(file, AVATAR_TYPES, MAX_AVATAR_BYTES)
+    return {"ok": True, "url": url, "contentType": content_type}
 
 
 @app.post("/api/media/upload")
 @limiter.limit("30/minute")
 async def upload_media(request: Request, file: UploadFile = File(...)):
-    if request.session.get("user_id") is None:
+    user_id = request.session.get("user_id")
+    if user_id is None:
         raise HTTPException(status_code=401, detail="Must be logged in to upload media")
     url, content_type = await store_upload(file, MEDIA_TYPES, MAX_MEDIA_BYTES)
-    return {"ok": True, "url": url, "contentType": content_type}
+    with get_session() as session:
+        media = DbMedia(user_id=user_id, url=url, content_type=content_type)
+        session.add(media)
+        session.commit()
+        session.refresh(media)
+    return {"ok": True, "id": str(media.id), "url": url, "contentType": content_type}
 
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")

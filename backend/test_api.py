@@ -42,6 +42,8 @@ def main():
     password = "testpass123"
     username = f"api_test_{suffix}"
     display_name = "API Test Creator"
+    target_email = f"api.target.{suffix}@connextionz.app"
+    target_username = f"api_target_{suffix}"
 
     anonymous = urllib.request.build_opener()
     session = urllib.request.HTTPCookieProcessor()
@@ -64,6 +66,14 @@ def main():
     })
     assert login["ok"] is True
     assert login["user"]["email"] == email
+
+    target_registration = request_json(anonymous, "/auth/register", {
+        "email": target_email,
+        "password": password,
+        "username": target_username,
+        "display_name": "API Target Creator",
+    })
+    assert target_registration["ok"] is True
 
     print("3. Query own profile")
     me_query = """
@@ -120,12 +130,16 @@ def main():
     print("5. Follow and unfollow")
     public_profile_query = """
         query Profile($username: String!) {
-          profile(username: $username) { username isFollowing }
+          profile(username: $username) { username displayName followers following isFollowing }
         }
     """
     before_follow = assert_graphql_success(graphql(
-        authenticated, public_profile_query, {"username": "luna"}
+        authenticated, public_profile_query, {"username": target_username}
     ))["profile"]
+    assert before_follow["username"] == target_username
+    assert before_follow["displayName"] == "API Target Creator"
+    assert before_follow["followers"] == 0
+    assert before_follow["following"] == 0
     assert before_follow["isFollowing"] is False
 
     follow_query = """
@@ -133,18 +147,25 @@ def main():
           follow(username: $username) { following followers followingCount }
         }
     """
-    follow = assert_graphql_success(graphql(authenticated, follow_query, {"username": "luna"}))["follow"]
+    follow = assert_graphql_success(graphql(authenticated, follow_query, {"username": target_username}))["follow"]
     assert follow["following"] is True
+    assert follow["followers"] == 1
     assert follow["followingCount"] == 1
     after_follow = assert_graphql_success(graphql(
-        authenticated, public_profile_query, {"username": "luna"}
+        authenticated, public_profile_query, {"username": target_username}
     ))["profile"]
+    assert after_follow["followers"] == 1
     assert after_follow["isFollowing"] is True
+
+    duplicate_follow = assert_graphql_success(graphql(
+        authenticated, follow_query, {"username": target_username}
+    ))["follow"]
+    assert duplicate_follow == {"following": True, "followers": 1, "followingCount": 1}
 
     following = assert_graphql_success(graphql(
         authenticated, "query { myFollowing { username } }"
     ))["myFollowing"]
-    assert any(profile["username"] == "luna" for profile in following)
+    assert [profile["username"] for profile in following].count(target_username) == 1
 
     following_page_query = """
         query { myFollowingPage(limit: 1) {
@@ -155,20 +176,27 @@ def main():
     following_page = assert_graphql_success(graphql(
         authenticated, following_page_query
     ))["myFollowingPage"]
-    assert [profile["username"] for profile in following_page["profiles"]] == ["luna"]
+    assert [profile["username"] for profile in following_page["profiles"]] == [target_username]
 
     unfollow_query = """
         mutation Unfollow($username: String!) {
           unfollow(username: $username) { following followers followingCount }
         }
     """
-    unfollow = assert_graphql_success(graphql(authenticated, unfollow_query, {"username": "luna"}))["unfollow"]
+    unfollow = assert_graphql_success(graphql(authenticated, unfollow_query, {"username": target_username}))["unfollow"]
     assert unfollow["following"] is False
+    assert unfollow["followers"] == 0
     assert unfollow["followingCount"] == 0
     after_unfollow = assert_graphql_success(graphql(
-        authenticated, public_profile_query, {"username": "luna"}
+        authenticated, public_profile_query, {"username": target_username}
     ))["profile"]
+    assert after_unfollow["followers"] == 0
     assert after_unfollow["isFollowing"] is False
+
+    duplicate_unfollow = assert_graphql_success(graphql(
+        authenticated, unfollow_query, {"username": target_username}
+    ))["unfollow"]
+    assert duplicate_unfollow == {"following": False, "followers": 0, "followingCount": 0}
 
     print("6. Logout and reject protected requests")
     logout = request_json(authenticated, "/auth/logout", {})

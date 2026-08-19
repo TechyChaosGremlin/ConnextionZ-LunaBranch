@@ -19,6 +19,7 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
     profile: Mapped["Profile"] = relationship(back_populates="user", cascade="all, delete-orphan")
+    media: Mapped[list["Media"]] = relationship(back_populates="user", cascade="all, delete-orphan")
 
 
 class Profile(Base):
@@ -65,6 +66,18 @@ class Follow(Base):
     )
 
 
+class Media(Base):
+    __tablename__ = "media"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    url: Mapped[str] = mapped_column(Text, nullable=False)
+    content_type: Mapped[str] = mapped_column(String(100), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    user: Mapped[User] = relationship(back_populates="media")
+
+
 class Post(Base):
     __tablename__ = "posts"
 
@@ -73,6 +86,8 @@ class Post(Base):
 
     thumbnail: Mapped[str] = mapped_column(String(500), nullable=False)
     media_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    media_id: Mapped[int | None] = mapped_column(ForeignKey("media.id", ondelete="SET NULL"), nullable=True, index=True)
+    thumbnail_media_id: Mapped[int | None] = mapped_column(ForeignKey("media.id", ondelete="SET NULL"), nullable=True, index=True)
     caption: Mapped[str | None] = mapped_column(Text, nullable=True)
     hashtags: Mapped[list[str]] = mapped_column(JSON, default=list)
     audio: Mapped[str] = mapped_column(String(255), default="Original Sound")

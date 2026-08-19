@@ -25,15 +25,18 @@ import { useTheme } from "./ThemeContext";
 import { ACCENT, useTokens, EmptyState } from "./settings-ui";
 import { registerCreator, type Creator, OWN_PLAYLISTS, OWN_STATS } from "./creators";
 import { useOwnContent } from "./posts-store";
-import { useFollowingCount } from "./follow-store";
+import { noteFollowState, useFollowerCount, useFollowingCount } from "./follow-store";
 import { useSession, useViewer } from "./session";
-import { updateAvatar } from "./auth-store";
+import { updateAvatar, type Result } from "./auth-store";
 import {
   Avatar, ContentGrid, CollabScorePill, CreatorRow, ProfileActionBar, SegmentedTabs,
   StatCounts, Thumb, VerifiedBadge, formatCount, useScrolled,
 } from "./profile-ui";
 import { AvatarPicker } from "./avatar-picker";
-import { fetchMeProfile, fetchMyFollowers, fetchMyFollowing, fetchProfileByUsername } from "./profile-graphql";
+import {
+  fetchFollowersPage, fetchFollowingPage, fetchMeProfile, fetchMyFollowersPage, fetchMyFollowingPage,
+  fetchProfileByUsername, type GraphQLProfilePage,
+} from "./profile-graphql";
 
 type ProfileTab = "posts" | "playlists" | "collabs";
 
@@ -153,9 +156,9 @@ export function ProfileScreen({
   const [avatarError, setAvatarError] = useState("");
   const { ref: scrollRef, scrolled } = useScrolled(90);
 
-  // Own follower count is not affected by the viewer's own follow graph, so the
-  // hook is only meaningful for other people's profiles.
-  const followerCount = creator.followers;
+  // Reads the store, not the prop: it moves the instant a follow toggles and
+  // takes the server's own count as soon as a follow/unfollow resolves.
+  const followerCount = useFollowerCount(creator);
 
   const collabPosts = useMemo(() => creator.posts.filter((p) => p.collabWith), [creator.posts]);
 
@@ -295,12 +298,12 @@ export function ProfileScreen({
             </div>
           )}
 
-          {/* ── Counts ── tappable only on your own profile: the prototype knows
-              your graph, not somebody else's follower list. */}
+          {/* ── Counts ── tapping either opens a paginated connections list,
+              scoped to this creator whether it's you or someone else. */}
           <div className="mb-5">
             <StatCounts items={[
-              { label: "Followers", value: followerCount, onClick: isOwner ? () => setConnections("followers") : undefined },
-              { label: "Following", value: creator.following, onClick: isOwner ? () => setConnections("following") : undefined },
+              { label: "Followers", value: followerCount, onClick: () => setConnections("followers") },
+              { label: "Following", value: creator.following, onClick: () => setConnections("following") },
               { label: "Collabs", value: creator.collabCount },
             ]} />
           </div>
@@ -377,6 +380,7 @@ export function ProfileScreen({
         {connections && (
           <ConnectionsSheet key="connections" initialTab={connections}
             followerCount={followerCount} followingCount={creator.following}
+            username={creator.username} isOwner={isOwner}
             onClose={() => setConnections(null)} onOpenProfile={onOpenProfile} />
         )}
       </AnimatePresence>
@@ -387,17 +391,19 @@ export function ProfileScreen({
 // ─── CONNECTIONS SHEET ───────────────────────────────────────────────────────
 
 /**
- * Followers and following, with a follow control on every row. The following
- * list is a snapshot taken when the sheet opens: unfollowing someone here should
- * flip their button and drop the count in the tab, not make the row vanish out
- * from under the finger that pressed it.
+ * Followers and following, paginated a page at a time and loaded further as
+ * the sheet is scrolled. The following list is a snapshot taken page by page:
+ * unfollowing someone here should flip their button and drop the count in the
+ * tab, not make the row vanish out from under the finger that pressed it.
  */
 function ConnectionsSheet({
-  initialTab, followerCount, followingCount, onClose, onOpenProfile,
+  initialTab, followerCount, followingCount, username, isOwner, onClose, onOpenProfile,
 }: {
   initialTab: "followers" | "following";
   followerCount: number;
   followingCount: number;
+  username: string;
+  isOwner: boolean;
   onClose: () => void;
   onOpenProfile?: (username: string) => void;
 }) {
@@ -405,21 +411,60 @@ function ConnectionsSheet({
   const t = useTokens(isDark);
   const [tab, setTab] = useState(initialTab);
 
-  const [remoteFollowing, setRemoteFollowing] = useState<Creator[] | null>(null);
-  const [remoteFollowers, setRemoteFollowers] = useState<Creator[] | null>(null);
+  const [pages, setPages] = useState<Record<"followers" | "following", {
+    rows: Creator[]; cursor: string | null; loadedOnce: boolean; loading: boolean; error: string | null;
+  }>>({
+    followers: { rows: [], cursor: null, loadedOnce: false, loading: false, error: null },
+    following: { rows: [], cursor: null, loadedOnce: false, loading: false, error: null },
+  });
+
+  const fetchPage = (which: "followers" | "following", after: string | null): Promise<Result<GraphQLProfilePage>> =>
+    which === "followers"
+      ? (isOwner ? fetchMyFollowersPage(after) : fetchFollowersPage(username, after))
+      : (isOwner ? fetchMyFollowingPage(after) : fetchFollowingPage(username, after));
+
+  const loadMore = (which: "followers" | "following") => {
+    setPages((prev) => {
+      const state = prev[which];
+      if (state.loading || (state.loadedOnce && !state.error && state.cursor === null)) return prev;
+      const next = { ...prev, [which]: { ...state, loading: true, error: null } };
+      void fetchPage(which, state.cursor).then((result) => {
+        if (!result.ok) {
+          setPages((current) => ({ ...current, [which]: { ...current[which], loading: false, error: result.error } }));
+          return;
+        }
+        const page = result.value;
+        setPages((current) => ({
+          ...current,
+          [which]: {
+            rows: [...current[which].rows, ...page.profiles.map(registerCreator)],
+            cursor: page.nextCursor,
+            loadedOnce: true,
+            loading: false,
+            error: null,
+          },
+        }));
+        // Seed the follow graph so each row's button is right the instant it renders.
+        page.profiles.forEach((profile) => {
+          if (profile.isFollowing != null) noteFollowState(registerCreator(profile).id, profile.isFollowing);
+        });
+      });
+      return next;
+    });
+  };
 
   useEffect(() => {
-    let active = true;
-    Promise.all([fetchMyFollowing(), fetchMyFollowers()]).then(([following, followers]) => {
-      if (!active) return;
-      if (following !== null) setRemoteFollowing(following.map(registerCreator));
-      if (followers !== null) setRemoteFollowers(followers.map(registerCreator));
-    });
-    return () => { active = false; };
-  }, []);
-  const followerRows = remoteFollowers ?? [];
-  const followingRows = remoteFollowing ?? [];
-  const rows = tab === "following" ? followingRows : followerRows;
+    loadMore(tab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, username, isOwner]);
+
+  const onListScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const el = event.currentTarget;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 200) loadMore(tab);
+  };
+
+  const state = pages[tab];
+  const rows = state.rows;
 
   return (
     <>
@@ -454,16 +499,30 @@ function ConnectionsSheet({
           ]}
         />
 
-        <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "none" }}>
-          {rows.length === 0 ? (
+        <div className="flex-1 overflow-y-auto" style={{ scrollbarWidth: "none" }} onScroll={onListScroll}>
+          {rows.length === 0 && state.error ? (
             <EmptyState icon={<Users className="w-7 h-7" />} t={t}
-              title="Not following anyone yet"
+              title="Could not load this list" body={state.error} />
+          ) : rows.length === 0 && !state.loading ? (
+            <EmptyState icon={<Users className="w-7 h-7" />} t={t}
+              title={tab === "following" ? "Not following anyone yet" : "No followers yet"}
               body="Follow creators from the feed and they will collect here." />
           ) : (
             <div className="pb-8">
               {rows.map((creator, i) => (
                 <CreatorRow key={creator.id} creator={creator} onOpen={onOpenProfile} last={i === rows.length - 1} />
               ))}
+              {state.loading && (
+                <p className="text-center text-[12px] py-4" style={{ color: t.sub }}>Loading…</p>
+              )}
+              {state.error && !state.loading && (
+                <div className="text-center py-4">
+                  <p className="text-[12px] mb-2" style={{ color: "#f87171" }}>{state.error}</p>
+                  <button onClick={() => loadMore(tab)} className="text-[12px] font-bold" style={{ color: ACCENT }}>
+                    Try again
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>

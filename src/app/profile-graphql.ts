@@ -17,6 +17,12 @@ export type GraphQLPost = {
   collabWith?: string | null;
 };
 
+export type UploadedPostMedia = {
+  id: string;
+  url: string;
+  contentType: string;
+};
+
 export type GraphQLPlaylist = {
   id: string;
   title: string;
@@ -37,6 +43,7 @@ export type GraphQLProfileSummary = {
   followers?: number | null;
   following?: number | null;
   openToCollab?: boolean | null;
+  isFollowing?: boolean | null;
 };
 
 export type GraphQLFeedItem = GraphQLPost & {
@@ -88,23 +95,41 @@ export type GraphQLProfile = {
 };
 
 import { BACKEND_API_URL, GRAPHQL_ENDPOINT } from "./api-config";
+import { type Result } from "./auth-store";
 
-export async function uploadMediaFile(file: Blob, filename: string): Promise<string | null> {
+async function uploadFile(file: Blob, filename: string, kind: "media" | "avatar"): Promise<Record<string, unknown> | null> {
   try {
     const form = new FormData();
     form.append("file", file, filename);
-    const response = await fetch(`${BACKEND_API_URL}/api/media/upload`, {
+    const endpoint = kind === "avatar" ? `${BACKEND_API_URL}/api/avatar/upload` : `${BACKEND_API_URL}/api/media/upload`;
+    const response = await fetch(endpoint, {
       method: "POST",
       body: form,
       credentials: "include",
     });
     if (!response.ok) return null;
-    const data = await response.json();
-    return typeof data.url === "string" ? new URL(data.url, BACKEND_API_URL).toString() : null;
+    return await response.json() as Record<string, unknown>;
   } catch (error) {
     console.warn("Media upload unavailable", error);
     return null;
   }
+}
+
+export async function uploadMediaFile(file: Blob, filename: string, kind: "media" | "avatar" = "media"): Promise<string | null> {
+  const data = await uploadFile(file, filename, kind);
+  return typeof data?.url === "string" ? new URL(data.url, BACKEND_API_URL).toString() : null;
+}
+
+export async function uploadPostMediaFile(file: Blob, filename: string): Promise<UploadedPostMedia | null> {
+  const data = await uploadFile(file, filename, "media");
+  if (typeof data?.id !== "string" || typeof data.url !== "string" || typeof data.contentType !== "string") {
+    return null;
+  }
+  return {
+    id: data.id,
+    url: new URL(data.url, BACKEND_API_URL).toString(),
+    contentType: data.contentType,
+  };
 }
 
 export async function fetchFeedPageFromApi(cursor: string | null, limit = 10): Promise<{
@@ -174,31 +199,58 @@ export async function fetchTrendingSounds(genre?: string): Promise<GraphQLSound[
   return data?.trendingSounds ?? null;
 }
 
-async function graphqlRequest<T>(query: string, variables?: Record<string, unknown>): Promise<T | null> {
+/**
+ * Runs a GraphQL request and reports *why* it failed — a dropped connection,
+ * an HTTP error, or a GraphQL error — instead of collapsing every case into
+ * `null`. Callers that need to tell "no more results" apart from "the request
+ * failed" (pagination, in particular) should use this over `graphqlRequest`.
+ */
+async function graphqlRequestResult<T>(query: string, variables?: Record<string, unknown>): Promise<Result<T>> {
+  let res: Response;
   try {
-    const res = await fetch(GRAPHQL_ENDPOINT, {
+    res = await fetch(GRAPHQL_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",  // Include cookies for session auth
       body: JSON.stringify({ query, variables }),
     });
-
-    if (!res.ok) {
-      console.warn("GraphQL request failed", res.status, await res.text());
-      return null;
-    }
-
-    const json = await res.json();
-    if (json.errors?.length) {
-      console.warn("GraphQL errors", json.errors);
-      return null;
-    }
-
-    return json.data as T;
   } catch (error) {
     console.warn("GraphQL unavailable", error);
-    return null;
+    return { ok: false, error: "Could not reach the server. Check your connection and try again." };
   }
+
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    console.warn("GraphQL request failed", res.status, body);
+    return {
+      ok: false,
+      error: res.status === 401
+        ? "Your session has expired. Sign in again to continue."
+        : res.status >= 500
+          ? "The server ran into a problem. Try again in a moment."
+          : "That request could not be completed.",
+    };
+  }
+
+  let json: { data?: T; errors?: { message?: string }[] };
+  try {
+    json = await res.json();
+  } catch (error) {
+    console.warn("GraphQL response was not valid JSON", error);
+    return { ok: false, error: "The server sent back something unexpected." };
+  }
+
+  if (json.errors?.length) {
+    console.warn("GraphQL errors", json.errors);
+    return { ok: false, error: json.errors[0]?.message || "That request could not be completed." };
+  }
+
+  return { ok: true, value: json.data as T };
+}
+
+async function graphqlRequest<T>(query: string, variables?: Record<string, unknown>): Promise<T | null> {
+  const result = await graphqlRequestResult<T>(query, variables);
+  return result.ok ? result.value : null;
 }
 
 export async function fetchMeProfile(): Promise<GraphQLProfile | null> {
@@ -396,8 +448,8 @@ export async function fetchMyPlaylists(): Promise<GraphQLPlaylist[]> {
 }
 
 export type PostInput = {
-  thumbnail: string;
-  mediaUrl?: string;
+  mediaId: string;
+  thumbnailMediaId: string;
   caption?: string;
   collabWith?: string;
   hashtags?: string[];
@@ -476,6 +528,7 @@ const profileSummaryFields = `
   followers
   following
   openToCollab
+  isFollowing
 `;
 
 export async function fetchSuggestedProfiles(limit = 6): Promise<GraphQLProfileSummary[] | null> {
@@ -499,15 +552,15 @@ export type GraphQLProfilePage = {
   nextCursor: string | null;
 };
 
-export async function fetchMyFollowingPage(after: string | null, limit = 20): Promise<GraphQLProfilePage | null> {
-  const data = await graphqlRequest<{ myFollowingPage: GraphQLProfilePage }>(`
+export async function fetchMyFollowingPage(after: string | null, limit = 20): Promise<Result<GraphQLProfilePage>> {
+  const result = await graphqlRequestResult<{ myFollowingPage: GraphQLProfilePage }>(`
     query MyFollowingPage($after: String, $limit: Int!) {
       myFollowingPage(after: $after, limit: $limit) {
         nextCursor profiles { ${profileSummaryFields} }
       }
     }
   `, { after, limit });
-  return data?.myFollowingPage ?? null;
+  return result.ok ? { ok: true, value: result.value.myFollowingPage } : result;
 }
 
 export async function fetchMyFollowers(): Promise<GraphQLProfileSummary[] | null> {
@@ -517,31 +570,59 @@ export async function fetchMyFollowers(): Promise<GraphQLProfileSummary[] | null
   return data?.myFollowers ?? null;
 }
 
-export async function fetchMyFollowersPage(after: string | null, limit = 20): Promise<GraphQLProfilePage | null> {
-  const data = await graphqlRequest<{ myFollowersPage: GraphQLProfilePage }>(`
+export async function fetchMyFollowersPage(after: string | null, limit = 20): Promise<Result<GraphQLProfilePage>> {
+  const result = await graphqlRequestResult<{ myFollowersPage: GraphQLProfilePage }>(`
     query MyFollowersPage($after: String, $limit: Int!) {
       myFollowersPage(after: $after, limit: $limit) {
         nextCursor profiles { ${profileSummaryFields} }
       }
     }
   `, { after, limit });
-  return data?.myFollowersPage ?? null;
+  return result.ok ? { ok: true, value: result.value.myFollowersPage } : result;
 }
 
-export async function followProfile(identifier: string): Promise<boolean | null> {
-  const data = await graphqlRequest<{ follow: { following: boolean } }>(`
+export async function fetchFollowersPage(username: string, after: string | null, limit = 20): Promise<Result<GraphQLProfilePage>> {
+  const result = await graphqlRequestResult<{ followersPage: GraphQLProfilePage }>(`
+    query FollowersPage($username: String!, $after: String, $limit: Int!) {
+      followersPage(username: $username, after: $after, limit: $limit) {
+        nextCursor profiles { ${profileSummaryFields} }
+      }
+    }
+  `, { username, after, limit });
+  return result.ok ? { ok: true, value: result.value.followersPage } : result;
+}
+
+export async function fetchFollowingPage(username: string, after: string | null, limit = 20): Promise<Result<GraphQLProfilePage>> {
+  const result = await graphqlRequestResult<{ followingPage: GraphQLProfilePage }>(`
+    query FollowingPage($username: String!, $after: String, $limit: Int!) {
+      followingPage(username: $username, after: $after, limit: $limit) {
+        nextCursor profiles { ${profileSummaryFields} }
+      }
+    }
+  `, { username, after, limit });
+  return result.ok ? { ok: true, value: result.value.followingPage } : result;
+}
+
+export type GraphQLFollowResult = {
+  following: boolean;
+  followers: number;
+  followingCount: number;
+};
+
+export async function followProfile(identifier: string): Promise<Result<GraphQLFollowResult>> {
+  const result = await graphqlRequestResult<{ follow: GraphQLFollowResult }>(`
     mutation Follow($username: String!) {
       follow(username: $username) { following followers followingCount }
     }
   `, { username: identifier });
-  return data?.follow.following ?? null;
+  return result.ok ? { ok: true, value: result.value.follow } : result;
 }
 
-export async function unfollowProfile(identifier: string): Promise<boolean | null> {
-  const data = await graphqlRequest<{ unfollow: { following: boolean } }>(`
+export async function unfollowProfile(identifier: string): Promise<Result<GraphQLFollowResult>> {
+  const result = await graphqlRequestResult<{ unfollow: GraphQLFollowResult }>(`
     mutation Unfollow($username: String!) {
       unfollow(username: $username) { following followers followingCount }
     }
   `, { username: identifier });
-  return data?.unfollow.following ?? null;
+  return result.ok ? { ok: true, value: result.value.unfollow } : result;
 }
