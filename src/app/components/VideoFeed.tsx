@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef } from "react";
 import { VideoPlayer } from "./VideoPlayer";
 
 interface Video {
@@ -73,17 +73,6 @@ export function VideoFeed() {
   const containerRef                              = useRef<HTMLDivElement>(null);
   const touchStartY                               = useRef<number>(0);
   const isScrolling                               = useRef(false);
-  const playerRefs                                = useRef<Map<string, any>>(new Map());
-
-  // Register a YouTube player instance so the feed can call playVideo()
-  // directly inside gesture handlers (required for iOS Safari autoplay).
-  const registerPlayer = useCallback((id: string, player: any) => {
-    if (player) {
-      playerRefs.current.set(id, player);
-    } else {
-      playerRefs.current.delete(id);
-    }
-  }, []);
 
   // Load more videos when approaching the end
   useEffect(() => {
@@ -105,16 +94,6 @@ export function VideoFeed() {
           top: index * window.innerHeight,
           behavior: "smooth",
         });
-      }
-      // Directly play the target video while still in the gesture context.
-      // On iOS Safari, playVideo() must be called synchronously within a
-      // user gesture (touch/wheel) — a delayed useEffect won't work.
-      const targetVideo = videos[index];
-      if (targetVideo) {
-        const player = playerRefs.current.get(targetVideo.id);
-        if (player && typeof player.playVideo === "function") {
-          player.playVideo();
-        }
       }
     }
   };
@@ -172,7 +151,6 @@ export function VideoFeed() {
           <VideoPlayer
             video={video}
             isActive={index === currentVideoIndex}
-            registerPlayer={registerPlayer}
           />
         </div>
       ))}

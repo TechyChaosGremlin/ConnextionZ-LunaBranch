@@ -14,9 +14,8 @@ interface Video {
 }
 
 interface VideoPlayerProps {
-  video:           Video;
-  isActive:        boolean;
-  registerPlayer?: (id: string, player: any) => void;
+  video:    Video;
+  isActive: boolean;
 }
 
 const formatNumber = (num: number): string => {
@@ -213,7 +212,7 @@ function CollabButton({ onCollab }: { onCollab: () => void }) {
   );
 }
 
-export function VideoPlayer({ video, isActive, registerPlayer }: VideoPlayerProps) {
+export function VideoPlayer({ video, isActive }: VideoPlayerProps) {
   const [isLiked, setIsLiked]                   = useState(false);
   const [isPlaying, setIsPlaying]               = useState(true);
   const [showCollabDialog, setShowCollabDialog] = useState(false);
@@ -234,7 +233,7 @@ export function VideoPlayer({ video, isActive, registerPlayer }: VideoPlayerProp
     if (!container) return;
 
     const createPlayer = () => {
-      const player = new (window as any).YT.Player(container, {
+      playerRef.current = new (window as any).YT.Player(container, {
         videoId,
         playerVars: {
           autoplay:    isActiveRef.current ? 1 : 0,
@@ -248,26 +247,21 @@ export function VideoPlayer({ video, isActive, registerPlayer }: VideoPlayerProp
         events: {
           onReady: () => {
             if (isActiveRef.current) {
-              player.playVideo();
+              playerRef.current?.playVideo();
               setIsPlaying(true);
             }
           },
         },
       });
-      playerRef.current = player;
-      // Register with the feed so playVideo() can be called synchronously
-      // inside gesture handlers (required for iOS Safari autoplay).
-      registerPlayer?.(video.id, player);
     };
 
     ensureYouTubeApiReady(createPlayer);
 
     return () => {
-      registerPlayer?.(video.id, null);
       playerRef.current?.destroy();
       playerRef.current = null;
     };
-  }, [videoId, video.id, registerPlayer]);
+  }, [videoId]);
 
   // Play automatically on loop while scrolled to; pause when scrolled away
   useEffect(() => {
