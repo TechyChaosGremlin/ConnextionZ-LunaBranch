@@ -15,7 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import String, and_, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from strawberry.fastapi import GraphQLRouter
 from strawberry.types import Info
@@ -199,6 +199,20 @@ def feed_item(post: DbPost, profile: DbProfile) -> FeedItem:
     )
 
 
+def visible_post_filter(viewer_id: int | None):
+    """Build the SQL predicate for posts the viewer is allowed to see."""
+    visibility = [DbPost.visibility == "public"]
+    if viewer_id is not None:
+        visibility.append(and_(
+            DbPost.visibility == "followers",
+            select(Follow.id).where(
+                Follow.follower_id == viewer_id,
+                Follow.following_id == DbProfile.user_id,
+            ).exists(),
+        ))
+    return or_(*visibility)
+
+
 @strawberry.type
 class Query:
     @strawberry.field
@@ -358,25 +372,33 @@ class Query:
             )
 
     @strawberry.field(name="profilePostsPage")
-    def profile_posts_page(self, username: str, after: str | None = None, limit: int = 12) -> PostPage:
+    def profile_posts_page(self, username: str, info: Info, after: str | None = None, limit: int = 12) -> PostPage:
+        viewer_id = info.context.get("user_id")
         with get_session() as session:
             profile = find_profile(session, username)
             if profile is None:
                 return PostPage(items=[], next_cursor=None)
-        page_size = max(1, min(limit, 50))
-        offset = 0
-        if after:
-            try:
-                offset = max(0, int(after))
-            except ValueError as error:
-                raise api_error("Invalid post cursor", "VALIDATION_ERROR", 400) from error
-        ordered = sorted(profile.posts, key=lambda post: post.id, reverse=True)
-        page = ordered[offset:offset + page_size]
-        has_more = offset + page_size < len(ordered)
-        return PostPage(
-            items=[post_to_graphql(post) for post in page],
-            next_cursor=str(offset + page_size) if has_more else None,
-        )
+            page_size = max(1, min(limit, 50))
+            offset = 0
+            if after:
+                try:
+                    offset = max(0, int(after))
+                except ValueError as error:
+                    raise api_error("Invalid post cursor", "VALIDATION_ERROR", 400) from error
+
+            can_view_all = viewer_id == profile.user_id
+            statement = select(DbPost).where(DbPost.profile_id == profile.id)
+            if not can_view_all:
+                statement = statement.join(DbProfile).where(visible_post_filter(viewer_id))
+            ordered = session.execute(
+                statement.order_by(DbPost.id.desc()).offset(offset).limit(page_size + 1)
+            ).scalars().all()
+            has_more = len(ordered) > page_size
+            page = ordered[:page_size]
+            return PostPage(
+                items=[post_to_graphql(post) for post in page],
+                next_cursor=str(offset + page_size) if has_more else None,
+            )
 
     @strawberry.field(name="myPlaylists")
     def my_playlists(self, info: Info) -> list[Playlist]:
@@ -516,7 +538,7 @@ class Query:
             )
 
     @strawberry.field
-    def feed(self, cursor: str | None = None, limit: int = 10) -> FeedPage:
+    def feed(self, info: Info, cursor: str | None = None, limit: int = 10) -> FeedPage:
         page_size = max(1, min(limit, 50))
         offset = 0
         if cursor:
@@ -526,9 +548,11 @@ class Query:
                 raise api_error("Invalid feed cursor", "VALIDATION_ERROR", 400)
 
         with get_session() as session:
+            viewer_id = info.context.get("user_id")
             rows = session.execute(
                 select(DbPost, DbProfile)
                 .join(DbProfile, DbPost.profile_id == DbProfile.id)
+                .where(visible_post_filter(viewer_id))
                 .order_by(DbPost.id.desc())
                 .offset(offset)
                 .limit(page_size + 1)
