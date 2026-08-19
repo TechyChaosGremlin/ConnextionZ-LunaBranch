@@ -4,13 +4,11 @@ import os
 import re
 import logging
 import time
-import uuid
-from pathlib import Path
 from typing import Optional
 
 import strawberry
 from graphql import GraphQLError
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.cors import CORSMiddleware
@@ -25,59 +23,23 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from backend.app.auth import authenticate_user, register_user, get_user_profile, AuthContext
+from backend.app.auth import get_user_profile, AuthContext
+from backend.app.auth_routes import create_auth_router
 from backend.app.database import get_session
 from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, Profile as DbProfile, Sound as DbSound, User
+from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
+from backend.app.media_routes import create_media_router
+from backend.app.graphql_types import (
+    ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, Playlist,
+    PlaylistInput, PostInput, Profile, ProfilePage, ProfileSummary, SoundResult,
+    UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
+)
 from backend.app.seed import seed_database
-from backend.app.storage import MediaStorage
-
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(PROJECT_ROOT / "media")))
-MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
-MAX_AVATAR_BYTES = 8 * 1024 * 1024
-MAX_MEDIA_BYTES = 512 * 1024 * 1024
-AVATAR_TYPES = {"image/jpeg", "image/png", "image/webp", "image/gif"}
-MEDIA_TYPES = AVATAR_TYPES | {"video/mp4", "video/webm", "video/quicktime", "video/ogg"}
-CONTENT_TYPE_EXTENSIONS = {
-    "image/jpeg": ".jpg",
-    "image/png": ".png",
-    "image/webp": ".webp",
-    "image/gif": ".gif",
-    "video/mp4": ".mp4",
-    "video/webm": ".webm",
-    "video/quicktime": ".mov",
-    "video/ogg": ".ogv",
-}
-SIGNATURE_BYTES = 64 * 1024
-media_storage = MediaStorage(MEDIA_ROOT)
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 logger = logging.getLogger("connextionz.api")
-
-
-def detect_media_type(header: bytes) -> str | None:
-    """Return a supported MIME type based on file bytes, never request metadata."""
-    if header.startswith(b"\xff\xd8\xff"):
-        return "image/jpeg"
-    if header.startswith(b"\x89PNG\r\n\x1a\n"):
-        return "image/png"
-    if header.startswith((b"GIF87a", b"GIF89a")):
-        return "image/gif"
-    if header.startswith(b"RIFF") and header[8:12] == b"WEBP":
-        return "image/webp"
-    if header.startswith(b"\x1a\x45\xdf\xa3") and b"webm" in header:
-        return "video/webm"
-    if header.startswith(b"OggS") and b"theora" in header:
-        return "video/ogg"
-    if header[4:8] == b"ftyp":
-        major_brand = header[8:12]
-        if major_brand == b"qt  ":
-            return "video/quicktime"
-        if major_brand in {b"isom", b"iso2", b"mp41", b"mp42", b"avc1", b"M4V ", b"MSNV"}:
-            return "video/mp4"
-    return None
 
 
 def api_error(message: str, code: str, status_code: int) -> GraphQLError:
@@ -101,114 +63,6 @@ def parse_int_id(raw_id: object, field_name: str = "ID") -> int:
 seed_database()
 
 
-@strawberry.type
-class ContentItem:
-    id: str
-    thumbnail: str
-    caption: str
-    views: int
-    likes: int
-    media_url: str | None = strawberry.field(name="mediaUrl", default=None)
-    collab_with: str | None = strawberry.field(name="collabWith")
-    hashtags: list[str] = strawberry.field(default_factory=list)
-    audio: str = "Original Sound"
-    visibility: str = "public"
-    allow_comments: bool = strawberry.field(name="allowComments", default=True)
-    allow_collabs: bool = strawberry.field(name="allowCollabs", default=True)
-    duration_sec: float = strawberry.field(name="durationSec", default=0.0)
-    comments: int = 0
-    shares: int = 0
-    saves: int = 0
-
-
-@strawberry.type
-class Playlist:
-    id: str
-    title: str
-    cover: str
-    item_label: str = strawberry.field(name="itemLabel")
-    plays: int
-
-
-@strawberry.type
-class ProfileSummary:
-    id: str
-    username: str
-    display_name: str = strawberry.field(name="displayName")
-    avatar_url: str = strawberry.field(name="avatarUrl")
-    avatar_color: str = strawberry.field(name="avatarColor")
-    verified: bool = False
-    collab_score: float = strawberry.field(name="collabScore", default=0.0)
-    collab_count: int = strawberry.field(name="collabCount", default=0)
-    followers: int = 0
-    following: int = 0
-    open_to_collab: bool = strawberry.field(name="openToCollab", default=True)
-    is_following: bool = strawberry.field(name="isFollowing", default=False)
-
-
-@strawberry.type
-class FollowResult:
-    following: bool
-    followers: int
-    following_count: int = strawberry.field(name="followingCount")
-
-
-@strawberry.type
-class FeedItem:
-    id: str
-    thumbnail: str
-    media_url: str | None = strawberry.field(name="mediaUrl", default=None)
-    caption: str
-    views: int
-    likes: int
-    collab_with: str | None = strawberry.field(name="collabWith", default=None)
-    hashtags: list[str] = strawberry.field(default_factory=list)
-    audio: str = "Original Sound"
-    visibility: str = "public"
-    allow_comments: bool = strawberry.field(name="allowComments", default=True)
-    allow_collabs: bool = strawberry.field(name="allowCollabs", default=True)
-    duration_sec: float = strawberry.field(name="durationSec", default=0.0)
-    comments: int = 0
-    shares: int = 0
-    saves: int = 0
-    creator: ProfileSummary
-
-
-@strawberry.type
-class FeedPage:
-    items: list[FeedItem]
-    next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
-
-
-@strawberry.type
-class ProfilePage:
-    profiles: list[ProfileSummary]
-    next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
-
-
-@strawberry.type
-class HashtagResult:
-    tag: str
-    posts: int
-    views: int
-
-
-@strawberry.type
-class SoundResult:
-    id: str
-    title: str
-    creator: str
-    creator_avatar: str = strawberry.field(name="creatorAvatar")
-    artwork: str
-    genre: str
-    video_count: int = strawberry.field(name="videoCount")
-    total_plays: int = strawberry.field(name="totalPlays")
-    rank: int
-    growth_pct: int = strawberry.field(name="growthPct")
-    duration: str
-    bpm: int
-
-
 def sound_to_graphql(sound: DbSound) -> SoundResult:
     return SoundResult(
         id=sound.id, title=sound.title, creator=sound.creator,
@@ -217,83 +71,6 @@ def sound_to_graphql(sound: DbSound) -> SoundResult:
         total_plays=sound.total_plays, rank=sound.rank,
         growth_pct=sound.growth_pct, duration=sound.duration, bpm=sound.bpm,
     )
-
-
-@strawberry.input
-class PostInput:
-    media_id: strawberry.ID = strawberry.field(name="mediaId")
-    thumbnail_media_id: strawberry.ID = strawberry.field(name="thumbnailMediaId")
-    caption: str | None = None
-    collab_with: str | None = strawberry.field(name="collabWith", default=None)
-    hashtags: list[str] = strawberry.field(default_factory=list)
-    audio: str = "Original Sound"
-    visibility: str = "public"
-    allow_comments: bool = strawberry.field(name="allowComments", default=True)
-    allow_collabs: bool = strawberry.field(name="allowCollabs", default=True)
-    duration_sec: float = strawberry.field(name="durationSec", default=0.0)
-
-
-@strawberry.input
-class PlaylistInput:
-    title: str
-    cover: str
-    item_label: str = strawberry.field(name="itemLabel")
-
-
-@strawberry.input
-class UpdatePostInput:
-    caption: str | None = None
-    collab_with: str | None = strawberry.field(name="collabWith", default=None)
-    hashtags: list[str] | None = None
-    audio: str | None = None
-    visibility: str | None = None
-    allow_comments: bool | None = strawberry.field(name="allowComments", default=None)
-    allow_collabs: bool | None = strawberry.field(name="allowCollabs", default=None)
-    duration_sec: float | None = strawberry.field(name="durationSec", default=None)
-
-
-@strawberry.input
-class UpdatePlaylistInput:
-    title: str | None = None
-    cover: str | None = None
-    item_label: str | None = strawberry.field(name="itemLabel", default=None)
-
-
-@strawberry.type
-class Profile:
-    id: str
-    username: str
-    display_name: str = strawberry.field(name="displayName")
-    avatar_url: str = strawberry.field(name="avatarUrl")
-    avatar_color: str = strawberry.field(name="avatarColor")
-    bio: str | None = None
-    location: str | None = None
-    website: str | None = None
-    verified: bool = False
-    online: bool = True
-    collab_status: str | None = strawberry.field(name="collabStatus")
-    collab_score: float = strawberry.field(name="collabScore")
-    collab_count: int = strawberry.field(name="collabCount")
-    followers: int = 0
-    following: int = 0
-    open_to_collab: bool = strawberry.field(name="openToCollab")
-    response_time: str = strawberry.field(name="responseTime")
-    posts: list[ContentItem]
-    playlists: list[Playlist]
-    is_following: bool = strawberry.field(name="isFollowing", default=False)
-
-
-@strawberry.input
-class UpdateProfileInput:
-    username: str | None = None
-    display_name: str | None = strawberry.field(name="displayName", default=None)
-    bio: str | None = None
-    location: str | None = None
-    website: str | None = None
-    avatar_url: str | None = strawberry.field(name="avatarUrl", default=None)
-    avatar_color: str | None = strawberry.field(name="avatarColor", default=None)
-    collab_status: str | None = strawberry.field(name="collabStatus", default=None)
-    open_to_collab: bool | None = strawberry.field(name="openToCollab", default=None)
 
 
 def post_to_graphql(post: DbPost) -> ContentItem:
@@ -1054,137 +831,11 @@ async def request_logging(request: Request, call_next):
     return response
 
 app.include_router(graphql_app, prefix="/graphql")
-
-
-async def store_upload(upload: UploadFile, allowed_types: set[str], max_bytes: int) -> tuple[str, str]:
-    temporary_file = MEDIA_ROOT / f".upload-{uuid.uuid4().hex}.tmp"
-    size = 0
-    header = bytearray()
-    try:
-        with temporary_file.open("wb") as output:
-            while chunk := await upload.read(1024 * 1024):
-                size += len(chunk)
-                if size > max_bytes:
-                    raise HTTPException(status_code=413, detail="Uploaded file is too large")
-                if len(header) < SIGNATURE_BYTES:
-                    header.extend(chunk[:SIGNATURE_BYTES - len(header)])
-                output.write(chunk)
-
-        content_type = detect_media_type(bytes(header))
-        if content_type is None or content_type not in allowed_types:
-            raise HTTPException(status_code=415, detail="Unsupported or invalid media file")
-
-        filename = f"{uuid.uuid4().hex}{CONTENT_TYPE_EXTENSIONS[content_type]}"
-        with temporary_file.open("rb") as source:
-            url = media_storage.save(source, filename, content_type)
-    except Exception:
-        temporary_file.unlink(missing_ok=True)
-        raise
-    finally:
-        temporary_file.unlink(missing_ok=True)
-        await upload.close()
-    return url, content_type
-
-
-@app.post("/api/avatar/upload")
-@limiter.limit("30/minute")
-async def upload_avatar(request: Request, file: UploadFile = File(...)):
-    if request.session.get("user_id") is None:
-        raise HTTPException(status_code=401, detail="Must be logged in to upload an avatar")
-    url, content_type = await store_upload(file, AVATAR_TYPES, MAX_AVATAR_BYTES)
-    return {"ok": True, "url": url, "contentType": content_type}
-
-
-@app.post("/api/media/upload")
-@limiter.limit("30/minute")
-async def upload_media(request: Request, file: UploadFile = File(...)):
-    user_id = request.session.get("user_id")
-    if user_id is None:
-        raise HTTPException(status_code=401, detail="Must be logged in to upload media")
-    url, content_type = await store_upload(file, MEDIA_TYPES, MAX_MEDIA_BYTES)
-    with get_session() as session:
-        media = DbMedia(user_id=user_id, url=url, content_type=content_type)
-        session.add(media)
-        session.commit()
-        session.refresh(media)
-    return {"ok": True, "id": str(media.id), "url": url, "contentType": content_type}
+app.include_router(create_media_router(limiter))
 
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
-
-
-# Auth endpoints
-@app.post("/auth/login")
-@limiter.limit("10/minute")
-async def login(request: Request):
-    """Login with email and password, set session cookie."""
-    data = await request.json()
-    email = data.get("email")
-    password = data.get("password")
-
-    if not email or not password:
-        raise HTTPException(status_code=400, detail="Email and password required")
-
-    user = authenticate_user(email, password)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    request.session["user_id"] = user.id
-    profile = get_user_profile(user.id)
-
-    return {
-        "ok": True,
-        "user": {
-            "id": user.id,
-            "email": user.email,
-        },
-        "profile": {
-            "username": profile.username,
-            "displayName": profile.display_name,
-            "bio": profile.bio,
-        } if profile else None,
-    }
-
-
-@app.post("/auth/register")
-@limiter.limit("5/minute")
-async def register(request: Request):
-    """Register a new account and profile."""
-    data = await request.json()
-    email = data.get("email")
-    password = data.get("password")
-    username = data.get("username")
-    display_name = data.get("display_name", username or "Creator")
-
-    if not email or not password or not username:
-        raise HTTPException(status_code=400, detail="Email, password, and username required")
-
-    result = register_user(email, password, username, display_name)
-    if result is None:
-        raise HTTPException(status_code=409, detail="Email or username already registered, or profile data is invalid")
-
-    user, profile = result
-    request.session["user_id"] = user.id
-
-    return {
-        "ok": True,
-        "user": {
-            "id": user.id,
-            "email": user.email,
-        },
-        "profile": {
-            "username": profile.username,
-            "displayName": profile.display_name,
-            "bio": profile.bio,
-        },
-    }
-
-
-@app.post("/auth/logout")
-async def logout(request: Request):
-    """Logout by clearing the session."""
-    request.session.clear()
-    return {"ok": True}
+app.include_router(create_auth_router(limiter))
 
 
 @app.get("/health")

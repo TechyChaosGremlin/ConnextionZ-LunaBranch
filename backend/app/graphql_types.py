@@ -1,0 +1,188 @@
+from __future__ import annotations
+
+import strawberry
+
+
+@strawberry.type
+class ContentItem:
+    id: str
+    thumbnail: str
+    caption: str
+    views: int
+    likes: int
+    media_url: str | None = strawberry.field(name="mediaUrl", default=None)
+    collab_with: str | None = strawberry.field(name="collabWith")
+    hashtags: list[str] = strawberry.field(default_factory=list)
+    audio: str = "Original Sound"
+    visibility: str = "public"
+    allow_comments: bool = strawberry.field(name="allowComments", default=True)
+    allow_collabs: bool = strawberry.field(name="allowCollabs", default=True)
+    duration_sec: float = strawberry.field(name="durationSec", default=0.0)
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+
+
+@strawberry.type
+class Playlist:
+    id: str
+    title: str
+    cover: str
+    item_label: str = strawberry.field(name="itemLabel")
+    plays: int
+
+
+@strawberry.type
+class ProfileSummary:
+    id: str
+    username: str
+    display_name: str = strawberry.field(name="displayName")
+    avatar_url: str = strawberry.field(name="avatarUrl")
+    avatar_color: str = strawberry.field(name="avatarColor")
+    verified: bool = False
+    collab_score: float = strawberry.field(name="collabScore", default=0.0)
+    collab_count: int = strawberry.field(name="collabCount", default=0)
+    followers: int = 0
+    following: int = 0
+    open_to_collab: bool = strawberry.field(name="openToCollab", default=True)
+    is_following: bool = strawberry.field(name="isFollowing", default=False)
+
+
+@strawberry.type
+class FollowResult:
+    following: bool
+    followers: int
+    following_count: int = strawberry.field(name="followingCount")
+
+
+@strawberry.type
+class FeedItem:
+    id: str
+    thumbnail: str
+    media_url: str | None = strawberry.field(name="mediaUrl", default=None)
+    caption: str
+    views: int
+    likes: int
+    collab_with: str | None = strawberry.field(name="collabWith", default=None)
+    hashtags: list[str] = strawberry.field(default_factory=list)
+    audio: str = "Original Sound"
+    visibility: str = "public"
+    allow_comments: bool = strawberry.field(name="allowComments", default=True)
+    allow_collabs: bool = strawberry.field(name="allowCollabs", default=True)
+    duration_sec: float = strawberry.field(name="durationSec", default=0.0)
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+    creator: ProfileSummary
+
+
+@strawberry.type
+class FeedPage:
+    items: list[FeedItem]
+    next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
+
+
+@strawberry.type
+class ProfilePage:
+    profiles: list[ProfileSummary]
+    next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
+
+
+@strawberry.type
+class HashtagResult:
+    tag: str
+    posts: int
+    views: int
+
+
+@strawberry.type
+class SoundResult:
+    id: str
+    title: str
+    creator: str
+    creator_avatar: str = strawberry.field(name="creatorAvatar")
+    artwork: str
+    genre: str
+    video_count: int = strawberry.field(name="videoCount")
+    total_plays: int = strawberry.field(name="totalPlays")
+    rank: int
+    growth_pct: int = strawberry.field(name="growthPct")
+    duration: str
+    bpm: int
+
+
+@strawberry.input
+class PostInput:
+    media_id: strawberry.ID = strawberry.field(name="mediaId")
+    thumbnail_media_id: strawberry.ID = strawberry.field(name="thumbnailMediaId")
+    caption: str | None = None
+    collab_with: str | None = strawberry.field(name="collabWith", default=None)
+    hashtags: list[str] = strawberry.field(default_factory=list)
+    audio: str = "Original Sound"
+    visibility: str = "public"
+    allow_comments: bool = strawberry.field(name="allowComments", default=True)
+    allow_collabs: bool = strawberry.field(name="allowCollabs", default=True)
+    duration_sec: float = strawberry.field(name="durationSec", default=0.0)
+
+
+@strawberry.input
+class PlaylistInput:
+    title: str
+    cover: str
+    item_label: str = strawberry.field(name="itemLabel")
+
+
+@strawberry.input
+class UpdatePostInput:
+    caption: str | None = None
+    collab_with: str | None = strawberry.field(name="collabWith", default=None)
+    hashtags: list[str] | None = None
+    audio: str | None = None
+    visibility: str | None = None
+    allow_comments: bool | None = strawberry.field(name="allowComments", default=None)
+    allow_collabs: bool | None = strawberry.field(name="allowCollabs", default=None)
+    duration_sec: float | None = strawberry.field(name="durationSec", default=None)
+
+
+@strawberry.input
+class UpdatePlaylistInput:
+    title: str | None = None
+    cover: str | None = None
+    item_label: str | None = strawberry.field(name="itemLabel", default=None)
+
+
+@strawberry.type
+class Profile:
+    id: str
+    username: str
+    display_name: str = strawberry.field(name="displayName")
+    avatar_url: str = strawberry.field(name="avatarUrl")
+    avatar_color: str = strawberry.field(name="avatarColor")
+    bio: str | None = None
+    location: str | None = None
+    website: str | None = None
+    verified: bool = False
+    online: bool = True
+    collab_status: str | None = strawberry.field(name="collabStatus")
+    collab_score: float = strawberry.field(name="collabScore")
+    collab_count: int = strawberry.field(name="collabCount")
+    followers: int = 0
+    following: int = 0
+    open_to_collab: bool = strawberry.field(name="openToCollab")
+    response_time: str = strawberry.field(name="responseTime")
+    posts: list[ContentItem]
+    playlists: list[Playlist]
+    is_following: bool = strawberry.field(name="isFollowing", default=False)
+
+
+@strawberry.input
+class UpdateProfileInput:
+    username: str | None = None
+    display_name: str | None = strawberry.field(name="displayName", default=None)
+    bio: str | None = None
+    location: str | None = None
+    website: str | None = None
+    avatar_url: str | None = strawberry.field(name="avatarUrl", default=None)
+    avatar_color: str | None = strawberry.field(name="avatarColor", default=None)
+    collab_status: str | None = strawberry.field(name="collabStatus", default=None)
+    open_to_collab: bool | None = strawberry.field(name="openToCollab", default=None)
