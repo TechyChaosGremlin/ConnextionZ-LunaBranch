@@ -284,20 +284,26 @@ class ProfileQueryMutationTests(unittest.TestCase):
         with patch("backend.app.main.get_session", return_value=self.session):
             updated = Mutation().update_profile(UpdateProfileInput(
                 username="@Editor.New",
-                display_name="Editor Updated",
-                bio="updated bio",
+                display_name="  Editor    Updated  ",
+                bio="  updated bio  ",
                 location="new-town",
+                website="example.com",
+                avatar_url="  https://cdn.example.com/avatar.png  ",
             ), info)
 
         self.assertEqual(updated.username, "editor.new")
         self.assertEqual(updated.display_name, "Editor Updated")
         self.assertEqual(updated.bio, "updated bio")
         self.assertEqual(updated.location, "new-town")
+        self.assertEqual(updated.website, "https://example.com")
+        self.assertEqual(updated.avatar_url, "https://cdn.example.com/avatar.png")
 
         reloaded = self.session.get(Profile, self.editor_profile.id)
         self.assertIsNotNone(reloaded)
         self.assertEqual(reloaded.username, "editor.new")
         self.assertEqual(reloaded.display_name, "Editor Updated")
+        self.assertEqual(reloaded.website, "https://example.com")
+        self.assertEqual(reloaded.avatar_url, "https://cdn.example.com/avatar.png")
 
     def test_update_profile_rejects_invalid_or_taken_username(self) -> None:
         info = SimpleNamespace(context={"user_id": self.editor.id})
@@ -311,6 +317,29 @@ class ProfileQueryMutationTests(unittest.TestCase):
             with self.assertRaises(GraphQLError) as conflict_error:
                 Mutation().update_profile(UpdateProfileInput(username="taken.name"), info)
         self.assertEqual(conflict_error.exception.extensions["code"], "CONFLICT")
+
+    def test_update_profile_rejects_invalid_display_name_bio_website_and_avatar_url(self) -> None:
+        info = SimpleNamespace(context={"user_id": self.editor.id})
+
+        with patch("backend.app.main.get_session", return_value=self.session):
+            with self.assertRaises(GraphQLError) as display_name_error:
+                Mutation().update_profile(UpdateProfileInput(display_name="   "), info)
+        self.assertEqual(display_name_error.exception.extensions["code"], "VALIDATION_ERROR")
+
+        with patch("backend.app.main.get_session", return_value=self.session):
+            with self.assertRaises(GraphQLError) as bio_error:
+                Mutation().update_profile(UpdateProfileInput(bio=("x" * 161)), info)
+        self.assertEqual(bio_error.exception.extensions["code"], "VALIDATION_ERROR")
+
+        with patch("backend.app.main.get_session", return_value=self.session):
+            with self.assertRaises(GraphQLError) as website_error:
+                Mutation().update_profile(UpdateProfileInput(website="not-a-url"), info)
+        self.assertEqual(website_error.exception.extensions["code"], "VALIDATION_ERROR")
+
+        with patch("backend.app.main.get_session", return_value=self.session):
+            with self.assertRaises(GraphQLError) as avatar_error:
+                Mutation().update_profile(UpdateProfileInput(avatar_url="javascript:alert(1)"), info)
+        self.assertEqual(avatar_error.exception.extensions["code"], "VALIDATION_ERROR")
 
     def test_update_profile_can_toggle_private_account(self) -> None:
         info = SimpleNamespace(context={"user_id": self.editor.id})

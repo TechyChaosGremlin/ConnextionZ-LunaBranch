@@ -1,4 +1,5 @@
 import { BACKEND_API_URL } from "./api-config";
+import { getProfileValidationError, normalizeProfilePatch } from "./profile-validation";
 
 // ─── ACCOUNT STORE ───────────────────────────────────────────────────────────
 //
@@ -432,7 +433,14 @@ export async function updateProfile(
   const account = findAccount(accounts, email);
   if (!account) return { ok: false, error: "That account no longer exists." };
 
-  const backend = await tryBackendUpdateProfile(patch);
+  const normalizedPatch = {
+    ...patch,
+    ...normalizeProfilePatch(patch),
+  };
+  const validationError = getProfileValidationError(normalizedPatch);
+  if (validationError) return { ok: false, error: validationError };
+
+  const backend = await tryBackendUpdateProfile(normalizedPatch);
   if (backend) {
     if (!backend.ok) return backend;
     account.profile = { ...profileOf(account), ...backend.value };
@@ -440,7 +448,7 @@ export async function updateProfile(
     return { ok: true, value: account };
   }
 
-  const next: Profile = { ...profileOf(account), ...patch };
+  const next: Profile = { ...profileOf(account), ...normalizedPatch };
   next.username = next.username.trim().replace(/^@/, "").toLowerCase();
 
   if (!next.username) return { ok: false, error: "Pick a username." };

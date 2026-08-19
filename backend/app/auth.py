@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import re
-
 import bcrypt
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -10,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from backend.app.database import get_session
 from backend.app.models import User, Profile
+from backend.app.profile_validation import validate_display_name, validate_username
 
 
 class AuthContext:
@@ -61,9 +60,10 @@ def register_user(
 ) -> tuple[User, Profile] | None:
     """Create a new user and profile. Returns (user, profile) or None if email exists."""
     email = email.strip().lower()
-    username = username.strip().removeprefix("@").lower()
-    display_name = display_name.strip()
-    if not re.fullmatch(r"[a-z0-9._]{3,24}", username) or not display_name:
+    try:
+        username = validate_username(username)
+        display_name = validate_display_name(display_name)
+    except ValueError:
         return None
 
     with get_session() as session:

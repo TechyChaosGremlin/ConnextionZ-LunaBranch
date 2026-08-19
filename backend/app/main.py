@@ -30,6 +30,13 @@ from backend.app.database import get_session, run_migrations
 from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, Profile as DbProfile, Sound as DbSound, User
 from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
 from backend.app.media_routes import create_media_router
+from backend.app.profile_validation import (
+    validate_avatar_url,
+    validate_bio,
+    validate_display_name,
+    validate_username,
+    validate_website,
+)
 from backend.app.graphql_types import (
     ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, Playlist,
     PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SoundResult,
@@ -634,9 +641,10 @@ class Mutation:
                 raise api_error("Profile not found", "NOT_FOUND", 404)
 
             if input.username is not None:
-                username = input.username.strip().removeprefix("@").lower()
-                if not re.fullmatch(r"[a-z0-9._]{3,24}", username):
-                    raise api_error("Usernames are 3-24 characters: letters, numbers, dots and underscores.", "VALIDATION_ERROR", 400)
+                try:
+                    username = validate_username(input.username)
+                except ValueError as exc:
+                    raise api_error(str(exc), "VALIDATION_ERROR", 400) from exc
                 taken = session.execute(
                     select(DbProfile).where(
                         DbProfile.username == username,
@@ -647,15 +655,27 @@ class Mutation:
                     raise api_error("That username is already taken.", "CONFLICT", 409)
                 profile.username = username
             if input.display_name is not None:
-                profile.display_name = input.display_name
+                try:
+                    profile.display_name = validate_display_name(input.display_name)
+                except ValueError as exc:
+                    raise api_error(str(exc), "VALIDATION_ERROR", 400) from exc
             if input.bio is not None:
-                profile.bio = input.bio
+                try:
+                    profile.bio = validate_bio(input.bio)
+                except ValueError as exc:
+                    raise api_error(str(exc), "VALIDATION_ERROR", 400) from exc
             if input.location is not None:
                 profile.location = input.location
             if input.website is not None:
-                profile.website = input.website
+                try:
+                    profile.website = validate_website(input.website)
+                except ValueError as exc:
+                    raise api_error(str(exc), "VALIDATION_ERROR", 400) from exc
             if input.avatar_url is not None:
-                profile.avatar_url = input.avatar_url
+                try:
+                    profile.avatar_url = validate_avatar_url(input.avatar_url)
+                except ValueError as exc:
+                    raise api_error(str(exc), "VALIDATION_ERROR", 400) from exc
             if input.avatar_color is not None:
                 profile.avatar_color = input.avatar_color
             if input.collab_status is not None:

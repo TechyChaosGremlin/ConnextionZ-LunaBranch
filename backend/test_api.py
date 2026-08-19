@@ -114,7 +114,7 @@ def main():
         "displayName": "Updated API Creator",
         "bio": "Persisted by the API test",
         "location": "SQL City",
-        "website": "https://example.com",
+        "website": "example.com",
         "avatarUrl": "https://example.com/avatar.png",
         "avatarColor": "#22c55e",
         "collabStatus": "Open to Collaboration",

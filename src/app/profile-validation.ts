@@ -13,12 +13,29 @@ export function normalizeProfileUsername(value: string): string {
   return value.trim().replace(/^@/, "").toLowerCase();
 }
 
-export function isValidWebsite(value: string): boolean {
+export function normalizeProfileDisplayName(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+export function normalizeProfileBio(value: string): string {
+  return value.trim();
+}
+
+export function normalizeProfileWebsite(value: string): string {
   const website = value.trim();
+  if (!website) return "";
+  return /^https?:\/\//i.test(website) ? website : `https://${website}`;
+}
+
+export function normalizeProfileAvatarUrl(value?: string): string {
+  return value?.trim() ?? "";
+}
+
+export function isValidWebsite(value: string): boolean {
+  const website = normalizeProfileWebsite(value);
   if (!website) return true;
   try {
-    const candidate = /^https?:\/\//i.test(website) ? website : `https://${website}`;
-    const parsed = new URL(candidate);
+    const parsed = new URL(website);
     const host = parsed.hostname.toLowerCase();
     return (parsed.protocol === "http:" || parsed.protocol === "https:") && (host.includes(".") || host === "localhost");
   } catch {
@@ -27,7 +44,7 @@ export function isValidWebsite(value: string): boolean {
 }
 
 export function isSafeAvatarUrl(value?: string): boolean {
-  const avatarUrl = value?.trim() ?? "";
+  const avatarUrl = normalizeProfileAvatarUrl(value);
   if (!avatarUrl) return true;
   if (avatarUrl.startsWith("data:")) return true;
   try {
@@ -58,14 +75,16 @@ export function validateProfilePatch(patch: Partial<{
   }
 
   if (patch.displayName !== undefined) {
-    const displayName = (patch.displayName ?? "").trim();
-    if (displayName.length > 40) {
+    const displayName = normalizeProfileDisplayName(patch.displayName ?? "");
+    if (!displayName) {
+      errors.displayName = "Display name cannot be empty.";
+    } else if (displayName.length > 40) {
       errors.displayName = "Display names can be up to 40 characters.";
     }
   }
 
   if (patch.bio !== undefined) {
-    const bio = patch.bio ?? "";
+    const bio = normalizeProfileBio(patch.bio ?? "");
     if (bio.length > 160) {
       errors.bio = "Bios can be up to 160 characters.";
     }
@@ -91,4 +110,22 @@ export function validateProfilePatch(patch: Partial<{
 
 export function getProfileValidationError(patch: Partial<{ username: string; displayName: string; bio: string; location: string; website: string; avatarUrl: string; }>) {
   return Object.values(validateProfilePatch(patch))[0];
+}
+
+export function normalizeProfilePatch(patch: Partial<{
+  username: string;
+  displayName: string;
+  bio: string;
+  location: string;
+  website: string;
+  avatarUrl: string;
+}>) {
+  return {
+    ...(patch.username !== undefined ? { username: normalizeProfileUsername(patch.username ?? "") } : {}),
+    ...(patch.displayName !== undefined ? { displayName: normalizeProfileDisplayName(patch.displayName ?? "") } : {}),
+    ...(patch.bio !== undefined ? { bio: normalizeProfileBio(patch.bio ?? "") } : {}),
+    ...(patch.location !== undefined ? { location: (patch.location ?? "").trim() } : {}),
+    ...(patch.website !== undefined ? { website: normalizeProfileWebsite(patch.website ?? "") } : {}),
+    ...(patch.avatarUrl !== undefined ? { avatarUrl: normalizeProfileAvatarUrl(patch.avatarUrl) } : {}),
+  };
 }

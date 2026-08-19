@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { AlertCircle, Check } from "lucide-react";
 import { profileOf, updateProfile } from "../auth-store";
+import { normalizeProfilePatch } from "../profile-validation";
 import { ACCENT, Callout, Field, Group, PrimaryAction, Row, SubPage } from "../settings-ui";
 import type { PageProps } from "./settingsPages.types";
 
@@ -28,10 +29,14 @@ export function EditProfilePage({ account, t, onBack, onAccountChange }: PagePro
   const handleSave = async () => {
     setSaving(true);
     setError("");
-    const result = await updateProfile(account.email, {
-      displayName: displayName.trim(), username, bio: bio.trim(),
-      location: location.trim(), website: website.trim(), avatarColor,
+    const normalized = normalizeProfilePatch({
+      displayName,
+      username,
+      bio,
+      location,
+      website,
     });
+    const result = await updateProfile(account.email, { ...normalized, avatarColor });
     setSaving(false);
     if (!result.ok) { setError(result.error); return; }
     onAccountChange(result.value);
