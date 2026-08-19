@@ -1,6 +1,7 @@
 // ─── ACCOUNT STORE ───────────────────────────────────────────────────────────
 import { BACKEND_API_URL } from "./api-config";
 import { updateMeProfile, uploadMediaFile } from "./profile-graphql";
+import { getProfileValidationError, normalizeProfileUsername, validateProfilePatch } from "./profile-validation";
 //
 // ⚠️  PROTOTYPE CREDENTIAL STUB — THIS IS NOT AUTHENTICATION.
 //
@@ -486,7 +487,26 @@ export async function updateProfile(
   email: string,
   patch: Partial<Profile>,
 ): Promise<Result<Account>> {
-  let avatarUrl = patch.avatarUrl;
+  const validationErrors = validateProfilePatch(patch);
+  const firstError = getProfileValidationError(patch);
+  if (firstError) {
+    return { ok: false, error: firstError };
+  }
+
+  const normalizedPatch: Partial<Profile> = {
+    ...patch,
+    username: patch.username ? normalizeProfileUsername(patch.username) : patch.username,
+    displayName: patch.displayName?.trim(),
+    bio: patch.bio?.trim(),
+    location: patch.location?.trim(),
+    website: patch.website?.trim(),
+    avatarUrl: patch.avatarUrl?.trim(),
+  };
+  if (normalizedPatch.avatarUrl && !/^data:|^https?:\/\//i.test(normalizedPatch.avatarUrl)) {
+    return { ok: false, error: "Profile photos can only be uploaded from your device or kept as-is." };
+  }
+
+  let avatarUrl = normalizedPatch.avatarUrl;
   if (avatarUrl?.startsWith("data:")) {
     const avatarBlob = await fetch(avatarUrl).then((response) => response.blob());
     const uploadedAvatar = await uploadMediaFile(avatarBlob, "avatar.webp", "avatar");
@@ -496,15 +516,15 @@ export async function updateProfile(
     avatarUrl = uploadedAvatar;
   }
   const backendProfile = await updateMeProfile({
-    username: patch.username,
-    displayName: patch.displayName,
-    bio: patch.bio,
-    location: patch.location,
-    website: patch.website,
+    username: normalizedPatch.username,
+    displayName: normalizedPatch.displayName,
+    bio: normalizedPatch.bio,
+    location: normalizedPatch.location,
+    website: normalizedPatch.website,
     avatarUrl,
-    avatarColor: patch.avatarColor,
-    collabStatus: patch.collabStatus,
-    openToCollab: patch.openToCollab,
+    avatarColor: normalizedPatch.avatarColor,
+    collabStatus: normalizedPatch.collabStatus,
+    openToCollab: normalizedPatch.openToCollab,
   });
   if (backendProfile) {
     const accounts = loadAccounts();
@@ -539,13 +559,12 @@ export async function updateProfile(
   const account = findAccount(accounts, email);
   if (!account) return { ok: false, error: "That account no longer exists." };
 
-  const next: Profile = { ...profileOf(account), ...patch };
-  next.username = next.username.trim().replace(/^@/, "").toLowerCase();
+  const next: Profile = { ...profileOf(account), ...normalizedPatch };
+  next.username = normalizeProfileUsername(next.username ?? "");
 
-  if (!next.username) return { ok: false, error: "Pick a username." };
-  if (!/^[a-z0-9._]{3,24}$/.test(next.username)) {
-    return { ok: false, error: "Usernames are 3–24 characters: letters, numbers, dots and underscores." };
-  }
+  const fallbackFirstError = getProfileValidationError(next);
+  if (fallbackFirstError) return { ok: false, error: fallbackFirstError };
+
   const taken = accounts.some(
     (a) => normalize(a.email) !== normalize(email) && a.profile?.username === next.username,
   );

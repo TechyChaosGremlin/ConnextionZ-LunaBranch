@@ -32,7 +32,7 @@ from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, M
 from backend.app.media_routes import create_media_router
 from backend.app.graphql_types import (
     ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, Playlist,
-    PlaylistInput, PostInput, Profile, ProfilePage, ProfileSummary, SoundResult,
+    PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SoundResult,
     UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
 )
 from backend.app.seed import seed_database
@@ -85,7 +85,9 @@ def post_to_graphql(post: DbPost) -> ContentItem:
 
 
 def profile_to_graphql(profile: DbProfile, is_following: bool = False) -> Profile:
-    posts = [post_to_graphql(post) for post in profile.posts]
+    all_posts = [post_to_graphql(post) for post in profile.posts]
+    page_size = 12
+    recent_posts = all_posts[:page_size]
     playlists = [
         Playlist(
             id=str(item.id),
@@ -115,7 +117,8 @@ def profile_to_graphql(profile: DbProfile, is_following: bool = False) -> Profil
         following=profile.following,
         open_to_collab=profile.open_to_collab,
         response_time=profile.response_time,
-        posts=posts,
+        posts=recent_posts,
+        posts_page=PostPage(items=recent_posts, next_cursor=str(page_size) if len(all_posts) > page_size else None),
         playlists=playlists,
         is_following=is_following,
     )
@@ -325,17 +328,55 @@ class Query:
 
     @strawberry.field(name="myPosts")
     def my_posts(self, info: Info) -> list[ContentItem]:
+        return self.my_posts_page(info=info).items
+
+    @strawberry.field(name="myPostsPage")
+    def my_posts_page(self, info: Info, after: str | None = None, limit: int = 12) -> PostPage:
         user_id = info.context.get("user_id")
         if user_id is None:
-            return []
+            return PostPage(items=[], next_cursor=None)
+        page_size = max(1, min(limit, 50))
+        offset = 0
+        if after:
+            try:
+                offset = max(0, int(after))
+            except ValueError as error:
+                raise api_error("Invalid post cursor", "VALIDATION_ERROR", 400) from error
         with get_session() as session:
             profile = session.execute(
                 select(DbProfile).where(DbProfile.user_id == user_id)
             ).scalar_one_or_none()
-            return [
-                post_to_graphql(post)
-                for post in profile.posts
-            ] if profile else []
+            if profile is None:
+                return PostPage(items=[], next_cursor=None)
+            rows = list(profile.posts)
+            ordered = sorted(rows, key=lambda post: post.id, reverse=True)
+            page = ordered[offset:offset + page_size]
+            has_more = offset + page_size < len(ordered)
+            return PostPage(
+                items=[post_to_graphql(post) for post in page],
+                next_cursor=str(offset + page_size) if has_more else None,
+            )
+
+    @strawberry.field(name="profilePostsPage")
+    def profile_posts_page(self, username: str, after: str | None = None, limit: int = 12) -> PostPage:
+        with get_session() as session:
+            profile = find_profile(session, username)
+            if profile is None:
+                return PostPage(items=[], next_cursor=None)
+        page_size = max(1, min(limit, 50))
+        offset = 0
+        if after:
+            try:
+                offset = max(0, int(after))
+            except ValueError as error:
+                raise api_error("Invalid post cursor", "VALIDATION_ERROR", 400) from error
+        ordered = sorted(profile.posts, key=lambda post: post.id, reverse=True)
+        page = ordered[offset:offset + page_size]
+        has_more = offset + page_size < len(ordered)
+        return PostPage(
+            items=[post_to_graphql(post) for post in page],
+            next_cursor=str(offset + page_size) if has_more else None,
+        )
 
     @strawberry.field(name="myPlaylists")
     def my_playlists(self, info: Info) -> list[Playlist]:

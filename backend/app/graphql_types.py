@@ -83,6 +83,12 @@ class FeedPage:
 
 
 @strawberry.type
+class PostPage:
+    items: list[ContentItem]
+    next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
+
+
+@strawberry.type
 class ProfilePage:
     profiles: list[ProfileSummary]
     next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
@@ -171,6 +177,7 @@ class Profile:
     open_to_collab: bool = strawberry.field(name="openToCollab")
     response_time: str = strawberry.field(name="responseTime")
     posts: list[ContentItem]
+    posts_page: PostPage = strawberry.field(name="postsPage")
     playlists: list[Playlist]
     is_following: bool = strawberry.field(name="isFollowing", default=False)
 
