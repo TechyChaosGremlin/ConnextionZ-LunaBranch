@@ -1,7 +1,4 @@
 // ─── ACCOUNT STORE ───────────────────────────────────────────────────────────
-import { BACKEND_API_URL } from "./api-config";
-import { updateMeProfile, uploadMediaFile } from "./profile-graphql";
-import { getProfileValidationError, normalizeProfileUsername, validateProfilePatch } from "./profile-validation";
 //
 // ⚠️  PROTOTYPE CREDENTIAL STUB — THIS IS NOT AUTHENTICATION.
 //
@@ -54,17 +51,8 @@ export interface Profile {
   bio: string;
   /** Hex used for the generated avatar, picked during onboarding. */
   avatarColor: string;
-  /**
-   * The uploaded profile image, as a data URL in the prototype and an origin
-   * URL once a real backend stores it. Empty or absent means no photo has been
-   * set — every avatar in the app renders through `<Avatar>`, which falls back
-   * to the initial on `avatarColor`, so a missing image is never a broken one.
-   */
-  avatarUrl?: string;
   location: string;
   website: string;
-  collabStatus?: string;
-  openToCollab?: boolean;
 }
 
 export interface Account {
@@ -102,7 +90,7 @@ export const DEMO_ACCOUNT: Account = {
   firstName: "Maya",
   lastName: "Chen",
   email: "demo@connextionz.app",
-  password: "demo",
+  password: "collab2026",
   providers: [],
   profile: {
     username: "maya.creates",
@@ -125,7 +113,6 @@ export function defaultProfile(account: Account): Profile {
     displayName: `${account.firstName} ${account.lastName}`.trim() || handleFromEmail(account.email),
     bio: "",
     avatarColor: "#00AEEF",
-    avatarUrl: "",
     location: "",
     website: "",
   };
@@ -146,145 +133,27 @@ function read<T>(key: string, fallback: T): T {
   }
 }
 
-/**
- * Reports whether the value was stored. Most callers ignore it — a lost session
- * is non-fatal — but avatar writes carry an image and can genuinely exceed the
- * storage quota, and that has to be told to the user rather than swallowed.
- */
-function write(key: string, value: unknown): boolean {
+function write(key: string, value: unknown) {
   try {
     localStorage.setItem(key, JSON.stringify(value));
-    return true;
   } catch {
-    return false;
-  }
-}
-
-// ─── BACKEND INTEGRATION ─────────────────────────────────────────────────────
-//
-// These functions try to use the Python backend API. If unavailable, they
-// fall back to the prototype localStorage-based auth.
-
-
-async function tryBackendSignIn(email: string, password: string): Promise<Result<Account> | null> {
-  try {
-    const res = await fetch(`${BACKEND_API_URL}/auth/login`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({ email, password }),
-    });
-
-    if (!res.ok) {
-      const error = await res.json();
-      return { ok: false, error: error.detail || "Login failed" };
-    }
-
-    const data = await res.json();
-    if (!data.ok || !data.user) return null;
-
-    // Create an Account object from the backend response
-    const account: Account = {
-      firstName: data.user.email.split("@")[0],
-      lastName: "",
-      email: data.user.email,
-      providers: [],
-      profile: data.profile ? {
-        username: data.profile.username,
-        displayName: data.profile.displayName || data.profile.username,
-        bio: data.profile.bio || "",
-        avatarColor: "#00AEEF",
-        location: "",
-        website: "",
-      } : undefined,
-    };
-
-    // Mark that we got auth from backend so getSession can use it
-    write("connextionz.backend_auth", true);
-    return { ok: true, value: account };
-  } catch (error) {
-    console.warn("Backend login unavailable, falling back to demo", error);
-    return null;
-  }
-}
-
-async function tryBackendRegister(input: {
-  firstName: string; lastName: string; email: string; password: string;
-}): Promise<Result<Account> | null> {
-  try {
-    const res = await fetch(`${BACKEND_API_URL}/auth/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-      body: JSON.stringify({
-        email: input.email,
-        password: input.password,
-        username: input.email.split("@")[0],
-        display_name: `${input.firstName} ${input.lastName}`.trim(),
-      }),
-    });
-
-    if (!res.ok) {
-      const error = await res.json();
-      return { ok: false, error: error.detail || "Registration failed" };
-    }
-
-    const data = await res.json();
-    if (!data.ok || !data.user) return null;
-
-    const account: Account = {
-      firstName: input.firstName,
-      lastName: input.lastName,
-      email: input.email,
-      providers: [],
-      profile: data.profile ? {
-        username: data.profile.username,
-        displayName: data.profile.displayName,
-        bio: data.profile.bio || "",
-        avatarColor: "#00AEEF",
-        location: "",
-        website: "",
-      } : undefined,
-    };
-
-    write("connextionz.backend_auth", true);
-    return { ok: true, value: account };
-  } catch (error) {
-    console.warn("Backend register unavailable, falling back to demo", error);
-    return null;
-  }
-}
-
-async function tryBackendLogout(): Promise<boolean> {
-  try {
-    await fetch(`${BACKEND_API_URL}/auth/logout`, {
-      method: "POST",
-      credentials: "include",
-    });
-    write("connextionz.backend_auth", false);
-    return true;
-  } catch {
-    return false;
+    /* Non-fatal: storage disabled means the session just will not persist. */
   }
 }
 
 function loadAccounts(): Account[] {
   const list = read<Account[]>(ACCOUNTS_KEY, []);
-  if (!Array.isArray(list)) return [structuredClone(DEMO_ACCOUNT)];
+  if (!Array.isArray(list)) return [DEMO_ACCOUNT];
   // Normalise older records and guarantee the demo account always exists.
   const accounts = list
     .filter((a): a is Account => !!a && typeof a.email === "string")
     .map((a) => ({ ...a, providers: Array.isArray(a.providers) ? a.providers : [] }));
-  // A *copy* of the seed: the mutating helpers below write into the records they
-  // load, and handing out the module constant would let a profile edit mutate it
-  // in place. That also made the edit invisible to React — the "new" account was
-  // the same object the UI already held, so nothing re-rendered.
   return accounts.some((a) => normalize(a.email) === DEMO_ACCOUNT.email)
     ? accounts
-    : [structuredClone(DEMO_ACCOUNT), ...accounts];
+    : [DEMO_ACCOUNT, ...accounts];
 }
 
-const saveAccounts = (a: Account[]): boolean => write(ACCOUNTS_KEY, a);
+const saveAccounts = (a: Account[]) => write(ACCOUNTS_KEY, a);
 const loadResets = () => read<ResetToken[]>(RESETS_KEY, []).filter((t) => !!t && !!t.token);
 const saveResets = (t: ResetToken[]) => write(RESETS_KEY, t);
 
@@ -301,11 +170,6 @@ function makeToken(): string {
 // ─── SIGN IN ─────────────────────────────────────────────────────────────────
 
 export async function signIn(email: string, password: string): Promise<Result<Account>> {
-  // Try backend first
-  const backendResult = await tryBackendSignIn(email, password);
-  if (backendResult !== null) return backendResult;
-
-  // Fall back to demo auth
   await delay(900);
   const account = findAccount(loadAccounts(), email);
 
@@ -328,11 +192,6 @@ export async function signIn(email: string, password: string): Promise<Result<Ac
 export async function register(input: {
   firstName: string; lastName: string; email: string; password: string;
 }): Promise<Result<Account>> {
-  // Try backend first
-  const backendResult = await tryBackendRegister(input);
-  if (backendResult !== null) return backendResult;
-
-  // Fall back to demo registration
   await delay(1100);
   const accounts = loadAccounts();
 
@@ -451,29 +310,43 @@ export async function resetPassword(token: string, newPassword: string): Promise
 // profile edit in one tab is never served stale from a cached copy. A real
 // backend swaps this for an httpOnly session cookie — `getSession()` becomes
 // `GET /me` and the rest of the app is unchanged.
+//
+// Session uses sessionStorage so the user is automatically logged out when
+// they close the tab or browser (exit the app).
 
 /** The signed-in account, or null when signed out / the account is gone. */
 export function getSession(): Account | null {
-  const email = read<string | null>(SESSION_KEY, null);
+  const email = sessionRead<string | null>(SESSION_KEY, null);
   if (!email || typeof email !== "string") return null;
   return findAccount(loadAccounts(), email) ?? null;
 }
 
 export function startSession(email: string) {
-  write(SESSION_KEY, normalize(email));
+  sessionWrite(SESSION_KEY, normalize(email));
 }
 
 export function endSession() {
-  // Try to logout from backend
-  tryBackendLogout().catch(() => {
-    /* Backend unavailable, that's okay */
-  });
-  
   try {
-    localStorage.removeItem(SESSION_KEY);
-    localStorage.removeItem("connextionz.backend_auth");
+    sessionStorage.removeItem(SESSION_KEY);
   } catch {
     /* Storage disabled — nothing was persisted to clear. */
+  }
+}
+
+function sessionRead<T>(key: string, fallback: T): T {
+  try {
+    const raw = sessionStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function sessionWrite(key: string, value: unknown) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* Non-fatal: storage disabled means the session just will not persist. */
   }
 }
 
@@ -487,134 +360,26 @@ export async function updateProfile(
   email: string,
   patch: Partial<Profile>,
 ): Promise<Result<Account>> {
-  const validationErrors = validateProfilePatch(patch);
-  const firstError = getProfileValidationError(patch);
-  if (firstError) {
-    return { ok: false, error: firstError };
-  }
-
-  const normalizedPatch: Partial<Profile> = {
-    ...patch,
-    username: patch.username ? normalizeProfileUsername(patch.username) : patch.username,
-    displayName: patch.displayName?.trim(),
-    bio: patch.bio?.trim(),
-    location: patch.location?.trim(),
-    website: patch.website?.trim(),
-    avatarUrl: patch.avatarUrl?.trim(),
-  };
-  if (normalizedPatch.avatarUrl && !/^data:|^https?:\/\//i.test(normalizedPatch.avatarUrl)) {
-    return { ok: false, error: "Profile photos can only be uploaded from your device or kept as-is." };
-  }
-
-  let avatarUrl = normalizedPatch.avatarUrl;
-  if (avatarUrl?.startsWith("data:")) {
-    const avatarBlob = await fetch(avatarUrl).then((response) => response.blob());
-    const uploadedAvatar = await uploadMediaFile(avatarBlob, "avatar.webp", "avatar");
-    if (!uploadedAvatar) {
-      return { ok: false, error: "The profile photo could not be uploaded. Try again." };
-    }
-    avatarUrl = uploadedAvatar;
-  }
-  const backendProfile = await updateMeProfile({
-    username: normalizedPatch.username,
-    displayName: normalizedPatch.displayName,
-    bio: normalizedPatch.bio,
-    location: normalizedPatch.location,
-    website: normalizedPatch.website,
-    avatarUrl,
-    avatarColor: normalizedPatch.avatarColor,
-    collabStatus: normalizedPatch.collabStatus,
-    openToCollab: normalizedPatch.openToCollab,
-  });
-  if (backendProfile) {
-    const accounts = loadAccounts();
-    const account = findAccount(accounts, email);
-    const base = account ?? {
-      firstName: email.split("@")[0],
-      lastName: "",
-      email,
-      providers: [],
-    };
-    return {
-      ok: true,
-      value: {
-        ...base,
-        profile: {
-          username: backendProfile.username,
-          displayName: backendProfile.displayName,
-          bio: backendProfile.bio ?? "",
-          avatarColor: backendProfile.avatarColor ?? "#00AEEF",
-          avatarUrl: backendProfile.avatarUrl ?? undefined,
-          location: backendProfile.location ?? "",
-          website: backendProfile.website ?? "",
-          collabStatus: backendProfile.collabStatus ?? "Open to Collaboration",
-          openToCollab: backendProfile.openToCollab ?? true,
-        },
-      },
-    };
-  }
-
   await delay(700);
   const accounts = loadAccounts();
   const account = findAccount(accounts, email);
   if (!account) return { ok: false, error: "That account no longer exists." };
 
-  const next: Profile = { ...profileOf(account), ...normalizedPatch };
-  next.username = normalizeProfileUsername(next.username ?? "");
+  const next: Profile = { ...profileOf(account), ...patch };
+  next.username = next.username.trim().replace(/^@/, "").toLowerCase();
 
-  const fallbackFirstError = getProfileValidationError(next);
-  if (fallbackFirstError) return { ok: false, error: fallbackFirstError };
-
+  if (!next.username) return { ok: false, error: "Pick a username." };
+  if (!/^[a-z0-9._]{3,24}$/.test(next.username)) {
+    return { ok: false, error: "Usernames are 3–24 characters: letters, numbers, dots and underscores." };
+  }
   const taken = accounts.some(
     (a) => normalize(a.email) !== normalize(email) && a.profile?.username === next.username,
   );
   if (taken) return { ok: false, error: "That username is already taken." };
 
   account.profile = next;
-  if (!saveAccounts(accounts)) {
-    return { ok: false, error: "Could not save your profile. Your device may be out of storage." };
-  }
-  // A new object every time: React consumers compare by identity, and an edit
-  // that returned the same reference would not re-render the app.
-  return { ok: true, value: { ...account } };
-}
-
-// ─── PROFILE IMAGE ───────────────────────────────────────────────────────────
-//
-// Kept separate from `updateProfile` because a real backend handles it
-// differently: the image is a multipart upload to its own endpoint, and the
-// response is a URL that the profile then references.
-//
-//   updateAvatar() → POST   /me/avatar   (multipart, responds with the URL)
-//   removeAvatar() → DELETE /me/avatar
-//
-// See `avatar-upload.ts` for the validation and downscaling that runs before
-// this — the file the user picked is never what gets stored.
-
-/** Sets the profile image. `avatarUrl` is a data URL in the prototype. */
-export async function updateAvatar(email: string, avatarUrl: string): Promise<Result<Account>> {
-  await delay(800);
-  const accounts = loadAccounts();
-  const account = findAccount(accounts, email);
-  if (!account) return { ok: false, error: "That account no longer exists." };
-
-  account.profile = { ...profileOf(account), avatarUrl };
-  if (!saveAccounts(accounts)) {
-    return { ok: false, error: "That image is too large to store on this device. Try a smaller one." };
-  }
-  return { ok: true, value: { ...account } };
-}
-
-/** Clears the profile image, falling the avatar back to the initial. */
-export async function removeAvatar(email: string): Promise<Result<Account>> {
-  await delay(400);
-  const accounts = loadAccounts();
-  const account = findAccount(accounts, email);
-  if (!account) return { ok: false, error: "That account no longer exists." };
-
-  account.profile = { ...profileOf(account), avatarUrl: "" };
   saveAccounts(accounts);
-  return { ok: true, value: { ...account } };
+  return { ok: true, value: account };
 }
 
 // ─── PASSWORD CHANGE ─────────────────────────────────────────────────────────
@@ -649,7 +414,7 @@ export async function changePassword(
   // Any outstanding reset link is now stale — a password change should
   // invalidate links mailed before it, exactly as a real backend would.
   saveResets(loadResets().filter((t) => t.email !== normalize(email)));
-  return { ok: true, value: { ...account } };
+  return { ok: true, value: account };
 }
 
 /** Whether this account is setting a first password rather than changing one. */

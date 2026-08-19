@@ -1,43 +1,52 @@
 import { useState } from 'react'
 import { motion, AnimatePresence } from 'motion/react'
 import {
-  Eye, EyeOff, Mail, Lock, ArrowRight, ArrowLeft,
+  Eye, EyeOff, Mail, 
+  Lock, ArrowRight, ArrowLeft,
   AlertCircle, Info
 } from "lucide-react";
 import {
   signIn, signInWithProvider,
   DEMO_ACCOUNT, type Provider, type Account,
 } from "../auth-store";
-import { Checkbox, GUTTER, H1, isValidEmail, Input, SCREEN, SUB, TOP_PAD } from '../auth-ui'
+import { 
+  Checkbox, GUTTER, H1, 
+  isValidEmail, Input, SCREEN, 
+  SUB, TOP_PAD 
+} from '../Auth'
 
-import AppleMark     from "./ui/AppleMark"
-import Divider       from "./ui/Divider"
-import GoogleMark    from "./ui/GoogleMark"
-import Logo          from "./ui/Logo"
-import PrimaryBtn    from "./ui/PrimaryBtn"
-import ProviderSheet, { type ProviderIdentity } from "./ProviderSheet"
-import SocialBtn     from "./ui/SocialBtn"
+import AppleMark                           from "./ui/AppleMark"
+import Divider                             from "./ui/Divider"
+import GoogleMark                          from "./ui/GoogleMark"
+import Logo                                from "./ui/Logo"
+import PrimaryBtn                          from "./ui/PrimaryBtn"
+import ProviderSheet, { ProviderIdentity } from "./ProviderSheet"
+import SocialBtn                           from "./ui/SocialBtn"
 
 export default function Login({
   onLogin, onCreate, onForgot, onBack,
 }: { onLogin: (account: Account) => void; onCreate: () => void; onForgot: () => void; onBack: () => void }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [showPw, setShowPw] = useState(false);
-  const [remember, setRemember] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [errors, setErrors] = useState<{ email?: string; password?: string; general?: string }>({});
+  const [email, setEmail]                 = useState("");
+  const [password, setPassword]           = useState("");
+  const [showPw, setShowPw]               = useState(false);
+  const [remember, setRemember]           = useState(false);
+  const [loading, setLoading]             = useState(false);
+  const [errors, setErrors]               = useState<{ email?: string; password?: string; general?: string }>({});
   /** Which provider's chooser is open, and which one is mid-sign-in. */
   const [providerSheet, setProviderSheet] = useState<Provider | null>(null);
-  const [providerBusy, setProviderBusy] = useState<Provider | null>(null);
+  const [providerBusy, setProviderBusy]   = useState<Provider | null>(null);
 
-  const valid = isValidEmail(email) && password.length > 0;
+  const valid = isValidEmail(email) && password.length >= 6;
 
   const handleLogin = async () => {
     const errs: typeof errors = {};
-    if (!isValidEmail(email)) errs.email = "Enter a valid email address";
-    if (!password) errs.password = "Enter your password";
-    if (Object.keys(errs).length) { setErrors(errs); return; }
+    if (!isValidEmail(email)) errs.email    = "Enter a valid email address";
+    if (password.length < 6)  errs.password = "Password must be at least 6 characters";
+
+    if (Object.keys(errs).length) { 
+      setErrors(errs); 
+      return; 
+    }
 
     setLoading(true);
     setErrors({});
@@ -45,7 +54,11 @@ export default function Login({
     setLoading(false);
 
     // Only authenticate when the credentials actually match.
-    if (!result.ok) { setErrors({ general: result.error }); return; }
+    if (!result.ok) { 
+      setErrors({ general: result.error }); 
+      return; 
+    }
+
     onLogin(result.value);
   };
 
@@ -61,7 +74,12 @@ export default function Login({
     setErrors({});
     const result = await signInWithProvider(provider, identity);
     setProviderBusy(null);
-    if (!result.ok) { setErrors({ general: result.error }); return; }
+
+    if (!result.ok) { 
+      setErrors({ general: result.error }); 
+      return; 
+    }
+
     onLogin(result.value);
   };
 
@@ -85,7 +103,10 @@ export default function Login({
         {/* Error banner */}
         <AnimatePresence>
           {errors.general && (
-            <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            <motion.div 
+            initial={{ opacity: 0, y: -8 }} 
+            animate={{ opacity: 1, y: 0  }} 
+            exit=   {{ opacity: 0, y: -8 }}
               className="flex items-center gap-3 px-4 py-3 rounded-2xl"
               style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)" }}>
               <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />

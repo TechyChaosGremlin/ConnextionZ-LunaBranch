@@ -1,87 +1,159 @@
-import { lazy, Suspense, useState, useCallback, useMemo, useRef, useEffect } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
+import { TrendingSounds } from "./TrendingSounds";
 import { AuthFlow } from "./Auth";
-import { type SettingsRoute } from "./SettingsPages";
-import { type Account, getSession, endSession, profileOf } from "./auth-store";
+import { SettingsScreen, DeleteProfileModal } from "./Settings";
+import { type Account, getSession, endSession } from "./auth-store";
 import { GoLiveSetup, CreatorLiveView, ViewerLiveView, LiveBannerStrip } from "./LiveStream";
+import { InboxScreen } from "./Inbox";
+import { YouTubePlayer } from "./components/YouTubePlayer";
 import { ThemeContext, useTheme } from "./ThemeContext";
-import { type Creator, type FeedVideo, OWN_STATS, creatorById, identityOf } from "./creators";
-import { fetchProfileByUsername } from "./profile-graphql";
-import { activateFollowGraph, noteFollowState, useFollow, useFollowingIds } from "./follow-store";
-import { SessionProvider } from "./session";
-import { ProfileScreen, useOwnCreator } from "./Profile";
-import { Avatar, CollabScorePill, ViewerAvatar, VerifiedBadge, formatCount } from "./profile-ui";
-import { useFeed } from "./feed-store";
-import { OWN_CREATOR_ID, activatePosts, useOwnFeedVideos } from "./posts-store";
-import { activateNotifications, notify, useUnreadCount } from "./notifications-store";
 import { motion, AnimatePresence } from "motion/react";
 import {
-  Heart, MessageCircle, Bookmark, Music, Bell, BarChart3, Radio, Upload as UploadIcon,
-  Home, Search, Plus, Mail, User, X, Send, Check, Loader2, RefreshCw, WifiOff,
+  Heart, MessageCircle, Bookmark, Music,
+  Home, Search, Plus, Mail, User, X, Send, Check,
   ChevronUp, ChevronDown, Navigation,
 } from "lucide-react";
 
-const DashboardScreen = lazy(() => import("./Dashboard").then((module) => ({ default: module.DashboardScreen })));
-const DeleteProfileModal = lazy(() => import("./Settings").then((module) => ({ default: module.DeleteProfileModal })));
-const InboxScreen = lazy(() => import("./Inbox").then((module) => ({ default: module.InboxScreen })));
-const NotificationsScreen = lazy(() => import("./Notifications").then((module) => ({ default: module.NotificationsScreen })));
-const SearchScreen = lazy(() => import("./Search.tsx").then((module) => ({ default: module.SearchScreen })));
-const SettingsScreen = lazy(() => import("./Settings").then((module) => ({ default: module.SettingsScreen })));
-const TrendingSounds = lazy(() => import("./TrendingSounds").then((module) => ({ default: module.TrendingSounds })));
-const UploadScreen = lazy(() => import("./Upload").then((module) => ({ default: module.UploadScreen })));
-
 // ─── DATA ────────────────────────────────────────────────────────────────────
-//
-// The feed's posts and the creators behind them both come from `creators.ts`, so
-// the identity on a video, on the profile it opens, under its comments and in
-// the inbox is the same record rather than four copies of it. Comments store a
-// handle and resolve the rest at render time for the same reason.
-//
-// The list of posts is *fetched* — see `feed-store.ts`. What is constant is how
-// a post resolves to a person, which is the function below.
+
+const VIDEOS = [
+  {
+    id: "1",
+    username: "zara.creates",
+    avatarUrl: "https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100&h=100&fit=crop&auto=format",
+    caption: "Late night studio sessions always hit different 🎵 new track dropping this Friday",
+    hashtags: ["#producer", "#musicmaker", "#newmusic"],
+    audio: "Original Sound — zara.creates",
+    collabStatus: "Available for Collaboration",
+    collabScore: 4.9, collabCount: 312,
+    likes: 284700, comments: 4820, shares: 12400, saves: 9300,
+    thumbnail: "https://images.unsplash.com/photo-1598488035139-bdbb2231ce04?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/SxUBblhKZFg",
+  },
+  {
+    id: "2",
+    username: "milo.visuals",
+    avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100&h=100&fit=crop&auto=format",
+    caption: "Golden hour was NOT messing around today 📸 caught the whole shift in one frame",
+    hashtags: ["#photography", "#goldenhour", "#creator"],
+    audio: "golden hour — JVKE",
+    collabStatus: "Open to Brand Deals",
+    collabScore: 4.7, collabCount: 184,
+    likes: 531200, comments: 7650, shares: 23800, saves: 18900,
+    thumbnail: "https://images.unsplash.com/photo-1493225457124-a3eb161ffa5f?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/TbixociDmPY",
+  },
+  {
+    id: "3",
+    username: "nova.dj",
+    avatarUrl: "https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=100&h=100&fit=crop&auto=format",
+    caption: "The drop at 2:14 will literally change your life. You've been warned 🔊",
+    hashtags: ["#dj", "#electronicmusic", "#setlife"],
+    audio: "HYPERSONIC — nova.dj",
+    collabStatus: "Available for Collaboration",
+    collabScore: 4.8, collabCount: 521,
+    likes: 892400, comments: 11200, shares: 45600, saves: 32100,
+    thumbnail: "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/nQ4H5WUpKyA",
+  },
+  {
+    id: "4",
+    username: "lex.codes",
+    avatarUrl: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=100&h=100&fit=crop&auto=format",
+    caption: "Built this entire app in a weekend. No sleep, just vibes and caffeine ⚡",
+    hashtags: ["#buildinpublic", "#devtok", "#indiedev"],
+    audio: "lo-fi beats — study playlist",
+    collabStatus: "Seeking Tech Sponsors",
+    collabScore: 4.5, collabCount: 97,
+    likes: 127600, comments: 3450, shares: 8900, saves: 15700,
+    thumbnail: "https://images.unsplash.com/photo-1611532736597-de2d4265fba3?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/oYxTTirKY8M",
+  },
+  {
+    id: "5",
+    username: "ren.filmco",
+    avatarUrl: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=100&h=100&fit=crop&auto=format",
+    caption: "Shot this on a $200 camera and people think it's RED footage 🎬 cinematography is 90% light",
+    hashtags: ["#filmmaking", "#cinematography", "#indiefilm"],
+    audio: "Cinematic Score — Artlist",
+    collabStatus: "Available for Collaboration",
+    collabScore: 4.6, collabCount: 238,
+    likes: 344900, comments: 6780, shares: 19200, saves: 24600,
+    thumbnail: "https://images.unsplash.com/photo-1540569876291-7b03b5441327?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/xBasQG_6p40",
+  },
+  {
+
+    id: "6",
+    username: "xander.djs",
+    avatarUrl:
+        "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=100&h=100&fit=crop&auto=format",
+    caption:
+        "Live from the booth tonight — this drop goes HARD. Turn it up 🔊🎧",
+    hashtags: ["#dj", "#electronicmusic", "#setlife", "#live"],
+    audio: "MIDNIGHT PULSE — xander.djs",
+    collabStatus: "Available for Collaboration",
+    collabScore: 4.8,
+    collabCount: 412,
+    likes: 764300,
+    comments: 9340,
+    shares: 38900,
+    saves: 27400,
+    thumbnail:
+        "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/UwLp-15miww",
+  }
+];
 
 // ─── COMMENTS DATA ───────────────────────────────────────────────────────────
 
 interface Comment {
   id: string;
-  /** Resolved to an avatar and display name by `identityOf` when rendered. */
   username: string;
+  avatarUrl: string;
   text: string;
   likes: number;
   time: string;
-  /** Written by the signed-in user, so the row renders their live avatar. */
-  mine?: boolean;
 }
 
 const SEED_COMMENTS: Record<string, Comment[]> = {
   "1": [
-    { id: "c1", username: "beatsby.kai", text: "This is everything \ud83d\udd25 the vibe is immaculate", likes: 842, time: "2h" },
-    { id: "c2", username: "sxundcloud", text: "Waiting for that Friday drop like \ud83d\udc40", likes: 391, time: "3h" },
-    { id: "c3", username: "lofi.luna", text: "Late night sessions really do hit diff, no notes", likes: 217, time: "5h" },
-    { id: "c4", username: "prod.gio", text: "Send me the stems I beg \ud83d\ude2d", likes: 188, time: "6h" },
+    { id: "c1", username: "beatsby.kai", avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=60&h=60&fit=crop&auto=format", text: "This is everything 🔥 the vibe is immaculate", likes: 842, time: "2h" },
+    { id: "c2", username: "sxundcloud", avatarUrl: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=60&h=60&fit=crop&auto=format", text: "Waiting for that Friday drop like 👀", likes: 391, time: "3h" },
+    { id: "c3", username: "lofi.luna", avatarUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=60&h=60&fit=crop&auto=format", text: "Late night sessions really do hit diff, no notes", likes: 217, time: "5h" },
+    { id: "c4", username: "prod.gio", avatarUrl: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=60&h=60&fit=crop&auto=format", text: "Send me the stems I beg 😭", likes: 188, time: "6h" },
   ],
   "2": [
-    { id: "c1", username: "lens.ivy", text: "The golden hour did NOT miss today omg", likes: 1204, time: "1h" },
-    { id: "c2", username: "raw.remi", text: "What camera settings were you on?? \ud83d\udc41\ufe0f", likes: 562, time: "2h" },
-    { id: "c3", username: "aperture.ax", text: "Frame within a frame \ud83c\udfaf this is art", likes: 344, time: "4h" },
+    { id: "c1", username: "lens.ivy", avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=60&h=60&fit=crop&auto=format", text: "The golden hour did NOT miss today omg", likes: 1204, time: "1h" },
+    { id: "c2", username: "raw.remi", avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=60&h=60&fit=crop&auto=format", text: "What camera settings were you on?? 👁️", likes: 562, time: "2h" },
+    { id: "c3", username: "aperture.ax", avatarUrl: "https://images.unsplash.com/photo-1527980965255-d3b416303d12?w=60&h=60&fit=crop&auto=format", text: "Frame within a frame 🎯 this is art", likes: 344, time: "4h" },
   ],
   "3": [
-    { id: "c1", username: "drop.dani", text: "2:14 destroyed me completely I am not okay", likes: 3821, time: "30m" },
-    { id: "c2", username: "subwoofer.sz", text: "My neighbours officially hate me because of this \ud83d\ude05", likes: 2109, time: "45m" },
-    { id: "c3", username: "rave.rx", text: "Actually life changing as promised", likes: 987, time: "1h" },
-    { id: "c4", username: "freq.faye", text: "Set this as my alarm and I've never been more awake", likes: 741, time: "2h" },
+    { id: "c1", username: "drop.dani", avatarUrl: "https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=60&h=60&fit=crop&auto=format", text: "2:14 destroyed me completely I am not okay", likes: 3821, time: "30m" },
+    { id: "c2", username: "subwoofer.sz", avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=60&h=60&fit=crop&auto=format", text: "My neighbours officially hate me because of this 😅", likes: 2109, time: "45m" },
+    { id: "c3", username: "rave.rx", avatarUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=60&h=60&fit=crop&auto=format", text: "Actually life changing as promised", likes: 987, time: "1h" },
+    { id: "c4", username: "freq.faye", avatarUrl: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=60&h=60&fit=crop&auto=format", text: "Set this as my alarm and I've never been more awake", likes: 741, time: "2h" },
   ],
   "4": [
-    { id: "c1", username: "devmo.rei", text: "No sleep + caffeine is literally the startup founder starter pack \ud83d\ude02", likes: 512, time: "1h" },
-    { id: "c2", username: "build.bex", text: "What stack? I need the full tutorial NOW", likes: 430, time: "2h" },
-    { id: "c3", username: "ship.syd", text: "Real builders ship. Respect \ud83e\udee1", likes: 298, time: "3h" },
+    { id: "c1", username: "devmo.rei", avatarUrl: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=60&h=60&fit=crop&auto=format", text: "No sleep + caffeine is literally the startup founder starter pack 😂", likes: 512, time: "1h" },
+    { id: "c2", username: "build.bex", avatarUrl: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=60&h=60&fit=crop&auto=format", text: "What stack? I need the full tutorial NOW", likes: 430, time: "2h" },
+    { id: "c3", username: "ship.syd", avatarUrl: "https://images.unsplash.com/photo-1527980965255-d3b416303d12?w=60&h=60&fit=crop&auto=format", text: "Real builders ship. Respect 🫡", likes: 298, time: "3h" },
   ],
   "5": [
-    { id: "c1", username: "film.fee", text: "People really underestimate lighting and it shows", likes: 891, time: "1h" },
-    { id: "c2", username: "cine.cam", text: "What camera is this? I'm genuinely shocked", likes: 654, time: "2h" },
-    { id: "c3", username: "grade.gus", text: "The color grade alone \ud83e\udd0c chef's kiss", likes: 420, time: "3h" },
-    { id: "c4", username: "reel.rin", text: "Tutorial please! I'll sub twice if I have to", likes: 311, time: "4h" },
+    { id: "c1", username: "film.fee", avatarUrl: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=60&h=60&fit=crop&auto=format", text: "People really underestimate lighting and it shows", likes: 891, time: "1h" },
+    { id: "c2", username: "cine.cam", avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=60&h=60&fit=crop&auto=format", text: "What camera is this? I'm genuinely shocked", likes: 654, time: "2h" },
+    { id: "c3", username: "grade.gus", avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=60&h=60&fit=crop&auto=format", text: "The color grade alone 🤌 chef's kiss", likes: 420, time: "3h" },
+    { id: "c4", username: "reel.rin", avatarUrl: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=60&h=60&fit=crop&auto=format", text: "Tutorial please! I'll sub twice if I have to", likes: 311, time: "4h" },
   ],
 };
+
+/** Creators the signed-in user follows — what the Following tab narrows to. */
+const FOLLOWING_IDS = ["1", "3", "5"];
+
+const fmt = (n: number) =>
+  n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + "M"
+  : n >= 1_000 ? (n / 1_000).toFixed(1) + "K"
+  : String(n);
 
 // ─── COLLAB EXPLOSION SHARDS ──────────────────────────────────────────────────
 
@@ -211,11 +283,10 @@ function CollabButton({ onTap }: { onTap: () => void }) {
 // ─── COMMENT SHEET ───────────────────────────────────────────────────────────
 
 function CommentSheet({
-  video, comments, onAddComment, onClose, onOpenProfile,
+  video, comments, onAddComment, onClose,
 }: {
-  video: FeedVideo; comments: Comment[];
+  video: typeof VIDEOS[0]; comments: Comment[];
   onAddComment: (text: string) => void; onClose: () => void;
-  onOpenProfile: (username: string) => void;
 }) {
   const isDark = useTheme();
   const [text, setText] = useState("");
@@ -254,19 +325,17 @@ function CommentSheet({
       </div>
       <div className="flex items-center justify-between px-5 pb-3 flex-shrink-0" style={{ borderBottom: `1px solid ${D.divider}` }}>
         <span className="font-bold text-[15px]" style={{ color: D.heading }}>
-          {formatCount(video.comments + comments.filter((c) => c.mine).length)} comments
+          {fmt(video.comments + comments.filter(c => c.id.startsWith("u")).length)} comments
         </span>
         <button onClick={onClose} className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: D.xBg }}>
           <X className="w-3.5 h-3.5" style={{ color: D.xIcon }} />
         </button>
       </div>
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-5">
-        {comments.map((c) => <CommentRow key={c.id} comment={c} onOpenProfile={onOpenProfile} />)}
+        {comments.map((c) => <CommentRow key={c.id} comment={c} />)}
       </div>
       <div className="flex-shrink-0 flex items-center gap-3 px-4 py-3" style={{ borderTop: `1px solid ${D.divider}` }}>
-        {/* The composer shows the viewer's own avatar, so a photo they just
-            uploaded is visible in the place they are about to use it. */}
-        <ViewerAvatar size={32} />
+        <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-white text-xs font-bold" style={{ background: "linear-gradient(135deg,#00AEEF,#0077cc)" }}>Y</div>
         <input
           ref={inputRef} value={text} onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
@@ -282,30 +351,19 @@ function CommentSheet({
   );
 }
 
-function CommentRow({ comment, onOpenProfile }: { comment: Comment; onOpenProfile: (username: string) => void }) {
+function CommentRow({ comment }: { comment: Comment }) {
   const isDark = useTheme();
   const [liked, setLiked] = useState(false);
   const text1 = isDark ? "#fff" : "#0a0e1a";
   const text2 = isDark ? "rgba(255,255,255,0.35)" : "rgba(10,14,26,0.4)";
   const text3 = isDark ? "rgba(255,255,255,0.85)" : "rgba(10,14,26,0.75)";
   const text4 = isDark ? "rgba(255,255,255,0.4)" : "rgba(10,14,26,0.35)";
-  // The commenter's identity, resolved from the directory rather than stored on
-  // the comment — an avatar change is reflected on their old comments too.
-  const who = identityOf(comment.username);
   return (
     <div className="flex gap-3">
-      <div className="mt-0.5">
-        {comment.mine
-          ? <ViewerAvatar size={32} />
-          : <Avatar src={who.avatarUrl} name={who.displayName} color={who.avatarColor} size={32}
-              onClick={() => onOpenProfile(comment.username)} />}
-      </div>
+      <img src={comment.avatarUrl} alt={comment.username} className="w-8 h-8 rounded-full object-cover flex-shrink-0 mt-0.5" />
       <div className="flex-1 min-w-0">
         <div className="flex items-baseline gap-2">
-          <button onClick={() => !comment.mine && onOpenProfile(comment.username)}
-            className="text-[13px] font-semibold" style={{ color: text1 }}>
-            @{comment.username}
-          </button>
+          <span className="text-[13px] font-semibold" style={{ color: text1 }}>@{comment.username}</span>
           <span className="text-[11px]" style={{ color: text2 }}>{comment.time}</span>
         </div>
         <p className="text-[13px] leading-snug mt-0.5" style={{ color: text3 }}>{comment.text}</p>
@@ -313,7 +371,7 @@ function CommentRow({ comment, onOpenProfile }: { comment: Comment; onOpenProfil
       </div>
       <button onClick={() => setLiked((l) => !l)} className="flex flex-col items-center gap-0.5 flex-shrink-0 pt-0.5">
         <Heart className={`w-4 h-4 ${liked ? "fill-red-500 text-red-500" : ""}`} style={{ color: liked ? undefined : text4 }} />
-        <span className="text-[10px]" style={{ color: text4 }}>{formatCount(comment.likes + (liked ? 1 : 0))}</span>
+        <span className="text-[10px]" style={{ color: text4 }}>{fmt(comment.likes + (liked ? 1 : 0))}</span>
       </button>
     </div>
   );
@@ -332,20 +390,11 @@ const PLATFORMS = [
   { id: "reddit",    label: "Reddit",    color: "#fff",    bg: "#FF4500", icon: "r/" },
 ];
 
-/**
- * What is being shared, rather than which video: the same sheet now shares a
- * profile, so it takes a subtitle and a link instead of reaching into a post.
- */
-interface ShareTarget {
-  subtitle: string;
-  url: string;
-}
-
-function ShareSheet({ target, onClose }: { target: ShareTarget; onClose: () => void }) {
+function ShareSheet({ video, onClose }: { video: typeof VIDEOS[0]; onClose: () => void }) {
   const isDark = useTheme();
   const [copied, setCopied] = useState(false);
   const [sharedTo, setSharedTo] = useState<string | null>(null);
-  const fakeUrl = target.url;
+  const fakeUrl = `https://connexionz.app/v/${video.id}`;
 
   const D = {
     sheetBg: isDark ? "linear-gradient(180deg,#1c1c24 0%,#14141a 100%)" : "linear-gradient(180deg,#ffffff 0%,#f7f9ff 100%)",
@@ -376,7 +425,7 @@ function ShareSheet({ target, onClose }: { target: ShareTarget; onClose: () => v
       <div className="flex items-center justify-between px-5 pb-4" style={{ borderBottom: `1px solid ${D.divider}` }}>
         <div>
           <p className="font-bold text-[15px]" style={{ color: D.heading }}>Share</p>
-          <p className="text-[12px] mt-0.5" style={{ color: D.sub }}>{target.subtitle}</p>
+          <p className="text-[12px] mt-0.5" style={{ color: D.sub }}>@{video.username}'s video</p>
         </div>
         <button onClick={onClose} className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: D.xBg }}>
           <X className="w-3.5 h-3.5" style={{ color: D.xIcon }} />
@@ -414,149 +463,41 @@ function ShareSheet({ target, onClose }: { target: ShareTarget; onClose: () => v
   );
 }
 
-// ─── RAIL FOLLOW BADGE ────────────────────────────────────────────────────────
-
-/**
- * The avatar badge in the action rail. One tap toggles the follow and the badge
- * answers on the spot: the `+` flips to a check, the fill drops from brand blue
- * to neutral glass, a ring pulses out of it and a "Following" chip slides in —
- * so the state change is confirmed before the network is.
- *
- * It is a second *presentation* of a follow, not a second implementation: state
- * and the optimistic write come from `useFollow`, the same hook behind the pill
- * on the profile screen, so the two can never disagree about who is followed.
- * The avatar itself opens that profile.
- */
-function RailFollowBadge({
-  creator, onOpenProfile,
-}: {
-  creator: Creator; onOpenProfile: (username: string) => void;
-}) {
-  const { following, pending, toggle } = useFollow(creator.id);
-  // Bumped on each *follow* tap; drives the one-shot ring + chip, then resets.
-  // A counter rather than a boolean so re-following replays the burst cleanly.
-  const [burst, setBurst] = useState(0);
-  const username = creator.username;
-
-  useEffect(() => {
-    if (!burst) return;
-    const t = setTimeout(() => setBurst(0), 1500);
-    return () => clearTimeout(t);
-  }, [burst]);
-
-  const handleClick = (e: React.MouseEvent) => {
-    // The slide behind the rail toggles play/pause on click — don't pause too.
-    e.stopPropagation();
-    if (pending) return;
-    setBurst((b) => (following ? 0 : b + 1));
-    toggle();
-  };
-
-  return (
-    <div className="relative mb-1">
-      <Avatar src={creator.avatarUrl} name={creator.displayName} color={creator.avatarColor}
-        size={44} ring ringColor={following ? "#00AEEF" : "#fff"}
-        onClick={() => onOpenProfile(username)} />
-
-      {/* Badge anchor — the offset lives here so motion's transforms stay free. */}
-      <div className="absolute -bottom-2 left-1/2 -translate-x-1/2">
-        {/* Shockwave confirming the tap */}
-        <AnimatePresence>
-          {burst > 0 && (
-            <motion.span key={`ring-${burst}`} initial={{ scale: 0.5, opacity: 0.9 }} animate={{ scale: 2.8, opacity: 0 }}
-              exit={{ opacity: 0 }} transition={{ duration: 0.5, ease: "easeOut" }}
-              className="absolute inset-0 rounded-full pointer-events-none"
-              style={{ border: "2px solid #00AEEF" }} />
-          )}
-        </AnimatePresence>
-
-        <motion.button type="button" onClick={handleClick}
-          aria-pressed={following}
-          aria-label={following ? `Unfollow ${username}` : `Follow ${username}`}
-          title={following ? "Following" : "Follow"}
-          whileHover={{ scale: 1.18 }} whileTap={{ scale: 0.8 }}
-          transition={{ type: "spring", stiffness: 520, damping: 22 }}
-          className="relative w-5 h-5 rounded-full flex items-center justify-center cursor-pointer"
-          style={{
-            background: following ? "rgba(255,255,255,0.18)" : "#00AEEF",
-            border: following ? "1px solid rgba(255,255,255,0.6)" : "none",
-            backdropFilter: following ? "blur(8px)" : "none",
-            boxShadow: following ? "none" : "0 2px 8px rgba(0,174,239,0.5)",
-            transitionProperty: "background, box-shadow, border-color",
-            transitionDuration: "0.2s",
-          }}>
-          {/* Icons swap simultaneously (no `mode="wait"`) so the glyph turns over
-              on the same frame as the tap rather than a beat behind it. */}
-          <AnimatePresence initial={false}>
-            <motion.span key={following ? "check" : "plus"}
-              initial={{ scale: 0, rotate: following ? -120 : 120, opacity: 0 }}
-              animate={{ scale: 1, rotate: 0, opacity: 1 }}
-              exit={{ scale: 0, opacity: 0 }}
-              transition={{ duration: 0.2, ease: [0.17, 0.89, 0.32, 1.28] }}
-              className="absolute inset-0 flex items-center justify-center">
-              {following
-                ? <Check className="w-3 h-3 text-white" strokeWidth={3.5} />
-                : <Plus className="w-3 h-3 text-white" strokeWidth={3.5} />}
-            </motion.span>
-          </AnimatePresence>
-        </motion.button>
-
-        {/* Word-level confirmation, left of the rail so it can't clip off-screen */}
-        <AnimatePresence>
-          {burst > 0 && following && (
-            <motion.span key="chip" initial={{ opacity: 0, x: 10, scale: 0.85 }} animate={{ opacity: 1, x: 0, scale: 1 }}
-              exit={{ opacity: 0, x: 10, scale: 0.85 }} transition={{ type: "spring", stiffness: 420, damping: 26 }}
-              className="absolute whitespace-nowrap px-2 py-0.5 rounded-full text-[10px] font-bold text-white pointer-events-none"
-              style={{ right: "calc(100% + 8px)", top: 0, background: "#00AEEF", boxShadow: "0 2px 10px rgba(0,174,239,0.5)" }}>
-              Following
-            </motion.span>
-          )}
-        </AnimatePresence>
-      </div>
-    </div>
-  );
-}
-
 // ─── ACTION RAIL ──────────────────────────────────────────────────────────────
 
 function ActionRail({
-  video, creator, liked, saved, onLike, onSave, onCollab, onComment, onShare, onOpenProfile,
+  video, liked, saved, onLike, onSave, onCollab, onComment, onShare,
 }: {
-  video: FeedVideo; creator: Creator; liked: boolean; saved: boolean;
+  video: typeof VIDEOS[0]; liked: boolean; saved: boolean;
   onLike: () => void; onSave: () => void; onCollab: () => void; onComment: () => void; onShare: () => void;
-  onOpenProfile: (username: string) => void;
 }) {
-  // `bottom-44` keeps the rail clear of the metaverse orb, which is parked in
-  // the bottom-right corner at a higher z — before this the orb covered Share
-  // and ate the tap.
   return (
-    <div className="flex flex-col items-center gap-5 absolute right-3 bottom-44 z-10">
-      <RailFollowBadge creator={creator} onOpenProfile={onOpenProfile} />
-      {/* Each control names itself: the rail is icons only, so without these
-          the whole of a post's interaction is unreachable to a screen reader. */}
-      <motion.button whileTap={{ scale: 0.85 }} onClick={onLike} className="flex flex-col items-center gap-1"
-        aria-label={liked ? "Unlike" : "Like"} aria-pressed={liked}>
+    <div className="flex flex-col items-center gap-5 lg:gap-6 absolute right-6 lg:right-8 top-1/2 -translate-y-1/2 z-10">
+      <div className="relative mb-1">
+        <img src={video.avatarUrl} alt={video.username} className="w-11 h-11 rounded-full object-cover border-2 border-white" />
+        <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full flex items-center justify-center text-white text-xs font-bold"
+          style={{ background: "#00AEEF", boxShadow: "0 2px 8px rgba(0,174,239,0.5)" }}>+</div>
+      </div>
+      <motion.button whileTap={{ scale: 0.85 }} onClick={onLike} className="flex flex-col items-center gap-1">
         <motion.div animate={liked ? { scale: [1, 1.35, 1] } : {}} transition={{ duration: 0.25 }}>
           <Heart className={`w-7 h-7 drop-shadow-lg ${liked ? "fill-red-500 text-red-500" : "text-white"}`} />
         </motion.div>
-        <span className="text-white text-[11px] font-semibold">{formatCount(video.likes + (liked ? 1 : 0))}</span>
+        <span className="text-white text-[11px] font-semibold">{fmt(video.likes + (liked ? 1 : 0))}</span>
       </motion.button>
       <div className="flex flex-col items-center gap-1">
-        <motion.button whileTap={{ scale: 0.85 }} onClick={onComment} aria-label="Comments">
+        <motion.button whileTap={{ scale: 0.85 }} onClick={onComment}>
           <MessageCircle className="w-7 h-7 text-white drop-shadow-lg" />
         </motion.button>
-        <span className="text-white text-[11px] font-semibold">{formatCount(video.comments)}</span>
+        <span className="text-white text-[11px] font-semibold">{fmt(video.comments)}</span>
       </div>
       <CollabButton onTap={onCollab} />
-      <motion.button whileTap={{ scale: 0.85 }} onClick={onSave} className="flex flex-col items-center gap-1"
-        aria-label={saved ? "Remove from saved" : "Save"} aria-pressed={saved}>
+      <motion.button whileTap={{ scale: 0.85 }} onClick={onSave} className="flex flex-col items-center gap-1">
         <Bookmark className={`w-7 h-7 drop-shadow-lg ${saved ? "fill-yellow-400 text-yellow-400" : "text-white"}`} />
-        <span className="text-white text-[11px] font-semibold">{formatCount(video.saves + (saved ? 1 : 0))}</span>
+        <span className="text-white text-[11px] font-semibold">{fmt(video.saves + (saved ? 1 : 0))}</span>
       </motion.button>
-      <motion.button whileTap={{ scale: 0.85 }} onClick={onShare} className="flex flex-col items-center gap-1"
-        aria-label="Share">
+      <motion.button whileTap={{ scale: 0.85 }} onClick={onShare} className="flex flex-col items-center gap-1">
         <Navigation className="w-7 h-7 text-white drop-shadow-lg" />
-        <span className="text-white text-[11px] font-semibold">{formatCount(video.shares)}</span>
+        <span className="text-white text-[11px] font-semibold">{fmt(video.shares)}</span>
       </motion.button>
     </div>
   );
@@ -564,20 +505,12 @@ function ActionRail({
 
 // ─── VIDEO INFO (BOTTOM LEFT) ─────────────────────────────────────────────────
 
-function VideoInfo({
-  video, creator, onOpenProfile,
-}: {
-  video: FeedVideo; creator: Creator; onOpenProfile: (username: string) => void;
-}) {
+function VideoInfo({ video }: { video: typeof VIDEOS[0] }) {
   return (
     <div className="absolute left-4 bottom-28 right-20 z-10 space-y-2">
       <div className="flex items-center gap-2">
-        <button onClick={(e) => { e.stopPropagation(); onOpenProfile(creator.username); }}
-          className="flex items-center gap-1.5">
-          <span className="text-white font-bold text-[15px]">@{creator.username}</span>
-          {creator.verified && <VerifiedBadge size={14} />}
-        </button>
-        {creator.collabStatus === "Available for Collaboration" && (
+        <span className="text-white font-bold text-[15px]">@{video.username}</span>
+        {video.collabStatus === "Available for Collaboration" && (
           <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
             style={{ background: "rgba(0,174,239,0.18)", border: "1px solid rgba(0,174,239,0.5)", color: "#00AEEF" }}>
             ✦ Open to Collab
@@ -596,9 +529,15 @@ function VideoInfo({
           {video.audio}
         </motion.span>
       </div>
-      {/* The same pill the profile header uses, reading the same creator record. */}
       <div className="flex items-center gap-2 mt-1">
-        <CollabScorePill score={creator.collabScore} count={creator.collabCount} compact onMedia />
+        <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full"
+          style={{ background: "rgba(0,174,239,0.12)", border: "1px solid rgba(0,174,239,0.3)", backdropFilter: "blur(8px)" }}>
+          <span style={{ color: "#00AEEF", fontSize: 11 }}>⭐</span>
+          <span className="font-bold text-[12px]" style={{ color: "#00AEEF" }}>{video.collabScore.toFixed(1)}</span>
+          <span className="text-white/40 text-[11px]">Collab Score</span>
+          <span className="text-white/25 text-[11px]">·</span>
+          <span className="text-white/40 text-[11px]">{video.collabCount} collabs</span>
+        </div>
       </div>
     </div>
   );
@@ -615,11 +554,7 @@ const COLLAB_TYPES = [
 const BUDGETS = ["Under $500", "$500–$2K", "$2K–$10K", "$10K+", "Open"];
 const TIMELINES = ["ASAP", "1–2 weeks", "1 month", "3+ months"];
 
-/**
- * Takes a creator, not a post: a collab request is addressed to a person, and
- * this sheet is now opened from the feed rail *and* from a profile.
- */
-function CollabSheet({ creator, onClose }: { creator: Creator; onClose: () => void }) {
+function CollabSheet({ video, onClose }: { video: typeof VIDEOS[0]; onClose: () => void }) {
   const isDark = useTheme();
   const [selectedType, setSelectedType] = useState<string | null>(null);
   const [message, setMessage] = useState("");
@@ -662,7 +597,7 @@ function CollabSheet({ creator, onClose }: { creator: Creator; onClose: () => vo
         <div className="flex items-center justify-between mb-5 pt-1">
           <div>
             <h2 className="font-bold text-lg" style={{ color: D.heading }}>Collaborate with</h2>
-            <p className="font-bold text-base" style={{ color: "#00AEEF" }}>@{creator.username}</p>
+            <p className="font-bold text-base" style={{ color: "#00AEEF" }}>@{video.username}</p>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center" style={{ background: D.xBg }}>
             <X className="w-4 h-4" style={{ color: D.xIcon }} />
@@ -684,7 +619,7 @@ function CollabSheet({ creator, onClose }: { creator: Creator; onClose: () => vo
         </div>
         <p className="text-[11px] uppercase tracking-widest mb-3 font-semibold" style={{ color: D.label }}>Message</p>
         <textarea value={message} onChange={(e) => setMessage(e.target.value)}
-          placeholder={`Hey @${creator.username}, I'd love to collab on something 🔥`} rows={3}
+          placeholder={`Hey @${video.username}, I'd love to collab on something 🔥`} rows={3}
           className="w-full rounded-2xl text-sm resize-none outline-none mb-5 p-4"
           style={{ background: D.areaBg, border: D.areaBorder, color: D.areaColor }} />
         <p className="text-[11px] uppercase tracking-widest mb-3 font-semibold" style={{ color: D.label }}>Budget</p>
@@ -737,19 +672,15 @@ function BottomNav({ active, onNav }: { active: string; onNav: (id: string) => v
     : "linear-gradient(to top, rgba(242,245,251,0.97) 60%, transparent)";
   const inactiveColor = isDark ? "rgba(255,255,255,0.45)" : "rgba(10,14,26,0.35)";
 
-  // z-40 puts the bar above the profile screen (z-30). At z-20 it was painted
-  // underneath it: the tabs were visible on your own profile but every tap
-  // landed on the grid behind them.
   return (
-    <nav className="absolute inset-x-0 bottom-0 z-40 flex items-end justify-around px-2 pt-3 pb-5"
+    <nav className="absolute inset-x-0 bottom-0 z-20 flex items-end justify-around px-2 pt-3 pb-5"
       style={{ background: navBg, backdropFilter: "blur(12px)" }}>
       {items.map((item) => {
         const isCreate = item.id === "create";
         const isActive = item.id === active;
         const Icon = item.icon;
         return (
-          <button key={item.id} onClick={() => onNav(item.id)} className="flex flex-col items-center gap-1 relative"
-            aria-label={isCreate ? "Create" : item.label} aria-current={isActive ? "page" : undefined}>
+          <button key={item.id} onClick={() => onNav(item.id)} className="flex flex-col items-center gap-1 relative">
             {isCreate ? (
               <div className="w-11 h-8 rounded-xl flex items-center justify-center shadow-lg"
                 style={{ background: "linear-gradient(135deg,#00AEEF,#0077cc)", boxShadow: "0 4px 16px rgba(0,174,239,0.4)" }}>
@@ -782,34 +713,11 @@ function BottomNav({ active, onNav }: { active: string; onNav: (id: string) => v
 // Full-screen app surface — fills the whole viewport edge-to-edge on every screen size.
 const FRAME = "relative overflow-hidden w-full h-full";
 
-type Screen =
-  | "feed" | "search" | "discover" | "profile" | "settings" | "inbox"
-  | "notifications" | "dashboard";
-
 export default function App() {
-  // The signed-in account, restored from the persisted session on load. The
-  // per-account stores are pointed at that account in the same breath, so the
-  // Following feed, every follow button, the viewer's own posts and their unread
-  // count are correct on the first paint rather than after an effect has run.
-  const [account, setAccount] = useState<Account | null>(() => {
-    const session = getSession();
-    activateFollowGraph(session?.email ?? null);
-    activatePosts(session?.email ?? null);
-    activateNotifications(session?.email ?? null);
-    return session;
-  });
+  // The signed-in account, restored from the persisted session on load.
+  const [account, setAccount] = useState<Account | null>(() => getSession());
   const [isDark, setIsDark] = useState(true);
-  const [screen, setScreen] = useState<Screen>("feed");
-  /**
-   * Creator profiles opened on top of whatever screen you were on, newest last.
-   * A stack because a profile can lead to another one — through a connections
-   * list — and Back has to return to the profile you came from.
-   */
-  const [profileStack, setProfileStack] = useState<string[]>([]);
-  /** Deep link into a Settings destination, e.g. Edit Profile from the profile. */
-  const [settingsRoute, setSettingsRoute] = useState<SettingsRoute | null>(null);
-  /** Handle to open a DM thread with when the Inbox mounts. */
-  const [inboxThread, setInboxThread] = useState<string | null>(null);
+  const [screen, setScreen] = useState<"feed" | "discover" | "profile" | "inbox">("feed");
   const [feedTab, setFeedTab] = useState<"forYou" | "following">("forYou");
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [liveMode, setLiveMode] = useState<"off" | "setup" | "creator" | "viewer">("off");
@@ -818,230 +726,19 @@ export default function App() {
   const [dir, setDir] = useState(1);
   const [liked, setLiked] = useState<Record<string, boolean>>({});
   const [saved, setSaved] = useState<Record<string, boolean>>({});
-  const [collabTarget, setCollabTarget] = useState<Creator | null>(null);
-  const [commentTarget, setCommentTarget] = useState<FeedVideo | null>(null);
-  const [shareTarget, setShareTarget] = useState<ShareTarget | null>(null);
-  /** Comments the viewer has added, per post — seeded posts start with theirs. */
-  const [userComments, setUserComments] = useState<Record<string, Comment[]>>(() => ({ ...SEED_COMMENTS }));
-  const [paused, setPaused] = useState(false);
-  /** The sound to open Trending Sounds on, when a search result sent us there. */
-  const [soundFocus, setSoundFocus] = useState<string | null>(null);
-  /** The create menu behind the + tab: upload a post, or go live. */
-  const [creating, setCreating] = useState(false);
-  const [uploading, setUploading] = useState(false);
-  const touchStartY = useRef(0);
-
-  // Follow state comes from the store, so the Following tab re-filters whether
-  // the follow was toggled on the rail, on a profile or in a connections list.
-  const followedIds = useFollowingIds();
-  const followed = useMemo(() => new Set(followedIds), [followedIds]);
-
-  // Sign-in, sign-out and account switches all re-point the per-account stores.
-  useEffect(() => {
-    activateFollowGraph(account?.email ?? null);
-    activatePosts(account?.email ?? null);
-    activateNotifications(account?.email ?? null);
-  }, [account?.email]);
-
-  // ── The feed ── fetched a page at a time, with the viewer's own posts on top
-  // of it. `useFeed` owns the loading, error and end-of-feed states; this screen
-  // only decides what to show for each of them.
-  const { items: fetched, status: feedStatus, error: feedError, loadingMore, reachedEnd, loadMore, reload } = useFeed();
-  const myVideos = useOwnFeedVideos();
-  const unreadNotifications = useUnreadCount();
-
-  const viewerUsername = account ? profileOf(account).username : "";
-
-  /**
-   * The viewer as a `Creator`, so their own posts render in the feed through
-   * exactly the same rail, caption and profile link as everyone else's.
-   */
-  const ownCreator = useMemo<Creator | undefined>(() => {
-    if (!account) return undefined;
-    const profile = profileOf(account);
-    return {
-      id: OWN_CREATOR_ID,
-      username: profile.username,
-      displayName: profile.displayName || profile.username,
-      avatarUrl: profile.avatarUrl ?? "",
-      avatarColor: profile.avatarColor,
-      bio: profile.bio,
-      location: profile.location,
-      website: profile.website,
-      verified: false,
-      online: true,
-      collabStatus: "Available for Collaboration",
-      collabScore: OWN_STATS.collabScore,
-      collabCount: OWN_STATS.collabCount,
-      followers: OWN_STATS.followers,
-      following: followedIds.length,
-      openToCollab: true,
-      responseTime: "< 4 hours",
-      posts: [],
-      playlists: [],
-    };
-  }, [account, followedIds.length]);
-
-  /** The creator behind a post — the viewer for their own, the directory's otherwise. */
-  const creatorOf = useCallback(
-    (video: FeedVideo): Creator | undefined =>
-      video.creatorId === OWN_CREATOR_ID ? ownCreator : creatorById(video.creatorId),
-    [ownCreator],
+  const [collabTarget, setCollabTarget] = useState<typeof VIDEOS[0] | null>(null);
+  const [commentTarget, setCommentTarget] = useState<typeof VIDEOS[0] | null>(null);
+  const [shareTarget, setShareTarget] = useState<typeof VIDEOS[0] | null>(null);
+  const [userComments, setUserComments] = useState<Record<string, Comment[]>>(
+    Object.fromEntries(VIDEOS.map((v) => [v.id, SEED_COMMENTS[v.id] ?? []]))
   );
+  const [paused, setPaused] = useState(false);
+  const touchStartY = useRef(0);
 
   // The two top-bar tabs are the same feed filtered, so switching them restarts
   // at the first video rather than leaving `idx` past the end of a shorter list.
-  // Own posts lead For You; Following is, by definition, other people.
-  const allVideos = useMemo(() => [...myVideos, ...fetched], [myVideos, fetched]);
-  const feed = useMemo(
-    () => (feedTab === "following" ? fetched.filter((v) => followed.has(v.creatorId)) : allVideos),
-    [feedTab, fetched, allVideos, followed],
-  );
-  const video = feed.length > 0 ? feed[Math.min(idx, feed.length - 1)] : undefined;
-  const videoCreator = video ? creatorOf(video) : undefined;
-
-  // Unfollowing from the Following tab can shrink the feed out from under `idx`.
-  useEffect(() => {
-    if (feed.length > 0 && idx > feed.length - 1) setIdx(feed.length - 1);
-  }, [feed.length, idx]);
-
-  // ── Infinite scroll ── the next page is asked for a slide early, so it has
-  // landed by the time the user swipes onto it rather than after.
-  useEffect(() => {
-    if (feedTab === "following") return;
-    if (feed.length && idx >= feed.length - 2) loadMore();
-  }, [idx, feed.length, feedTab, loadMore]);
-
-  /**
-   * The one way into a profile, from anywhere: the feed rail, a caption, a
-   * comment, a connections list. Your own handle resolves to your own profile
-   * tab rather than pushing a visitor's view of yourself onto the stack.
-   */
-  const openProfile = useCallback((username: string) => {
-    if (username.toLowerCase() === viewerUsername.toLowerCase()) {
-      setProfileStack([]);
-      setScreen("profile");
-      return;
-    }
-    setProfileStack((stack) => (stack[stack.length - 1] === username ? stack : [...stack, username]));
-  }, [viewerUsername]);
-
-  const closeProfile = useCallback(() => setProfileStack((stack) => stack.slice(0, -1)), []);
-
-  /** Messaging a creator leaves their profile and lands in the thread. */
-  const messageCreator = useCallback((creator: Creator) => {
-    setProfileStack([]);
-    setInboxThread(creator.username);
-    setScreen("inbox");
-  }, []);
-
-  const shareProfile = useCallback((creator: Creator) => {
-    setShareTarget({ subtitle: `@${creator.username}'s profile`, url: `https://connexionz.app/@${creator.username}` });
-  }, []);
-
-  const openSettings = useCallback((route: SettingsRoute | null = null) => {
-    setSettingsRoute(route);
-    setScreen("settings");
-  }, []);
-
-  const [visitedCreator, setVisitedCreator] = useState<Creator | undefined>(undefined);
-
-  useEffect(() => {
-    if (profileStack.length === 0) {
-      setVisitedCreator(undefined);
-      return;
-    }
-
-    const username = profileStack[profileStack.length - 1];
-    let active = true;
-    fetchProfileByUsername(username).then((profile) => {
-      if (!active || !profile) return;
-      if (profile.isFollowing != null) noteFollowState(profile.id, profile.isFollowing);
-      setVisitedCreator({
-        id: profile.id,
-        username: profile.username,
-        displayName: profile.displayName ?? profile.username,
-        avatarUrl: profile.avatarUrl ?? "",
-        avatarColor: profile.avatarColor ?? "#00AEEF",
-        bio: profile.bio ?? "",
-        location: profile.location ?? "",
-        website: profile.website ?? "",
-        verified: !!profile.verified,
-        online: !!profile.online,
-        collabStatus: profile.collabStatus ?? "Available for Collaboration",
-        collabScore: profile.collabScore ?? 0,
-        collabCount: profile.collabCount ?? 0,
-        followers: profile.followers ?? 0,
-        following: profile.following ?? 0,
-        openToCollab: profile.openToCollab ?? true,
-        responseTime: profile.responseTime ?? "< 24 hours",
-        posts: (profile.posts ?? []).map((p) => ({
-          id: p.id,
-          thumbnail: p.thumbnail,
-          caption: p.caption,
-          views: p.views,
-          likes: p.likes,
-          ...(p.collabWith ? { collabWith: p.collabWith } : {}),
-        })),
-        playlists: (profile.playlists ?? []).map((p) => ({
-          id: p.id,
-          title: p.title,
-          cover: p.cover,
-          itemLabel: p.itemLabel,
-          plays: p.plays,
-        })),
-      });
-    });
-
-    return () => { active = false; };
-  }, [profileStack]);
-
-  /**
-   * A tile that is also a feed post jumps the feed to that slide. Back catalogue
-   * tiles have no destination in the prototype, so `canOpenPost` keeps them from
-   * being offered as taps at all. Both read the *loaded* feed, so a post the
-   * viewer just uploaded is openable the moment it exists.
-   */
-  const canOpenPost = useCallback((postId: string) => allVideos.some((v) => v.id === postId), [allVideos]);
-
-  const openPost = useCallback((postId: string) => {
-    const index = allVideos.findIndex((v) => v.id === postId);
-    if (index < 0) return;
-    setProfileStack([]);
-    setFeedTab("forYou");
-    setDir(1);
-    setIdx(index);
-    setScreen("feed");
-  }, [allVideos]);
-
-  const sharePost = useCallback((postId: string) => {
-    const post = allVideos.find((v) => v.id === postId);
-    const creator = post ? creatorOf(post) : undefined;
-    setShareTarget({
-      subtitle: creator ? `@${creator.username}'s video` : "this video",
-      url: `https://connexionz.app/v/${postId}`,
-    });
-  }, [allVideos, creatorOf]);
-
-  /** Trending Sounds, optionally opened straight onto one sound. */
-  const openSounds = useCallback((soundId?: string) => {
-    setSoundFocus(soundId ?? null);
-    setScreen("discover");
-  }, []);
-
-  /** A DM thread from anywhere — a notification, a profile, a collab accept. */
-  const openThread = useCallback((username: string) => {
-    setProfileStack([]);
-    setInboxThread(username);
-    setScreen("inbox");
-  }, []);
-
-  /** The Inbox on its collab requests tab. */
-  const openRequests = useCallback(() => {
-    setProfileStack([]);
-    setInboxThread(null);
-    setScreen("inbox");
-  }, []);
+  const feed = feedTab === "following" ? VIDEOS.filter((v) => FOLLOWING_IDS.includes(v.id)) : VIDEOS;
+  const video = feed[Math.min(idx, feed.length - 1)];
 
   const goNext = useCallback(() => { if (idx < feed.length - 1) { setDir(1); setIdx((i) => i + 1); } }, [idx, feed.length]);
   const goPrev = useCallback(() => { if (idx > 0) { setDir(-1); setIdx((i) => i - 1); } }, [idx]);
@@ -1071,17 +768,9 @@ export default function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [goNext, goPrev]);
 
-  /** Signing out has to clear pushed screens as well as the session. */
-  const resetToFeed = useCallback(() => {
-    setProfileStack([]);
-    setSettingsRoute(null);
-    setInboxThread(null);
-    setScreen("feed");
-  }, []);
-
-  const handleLogout = useCallback(() => { endSession(); setAccount(null); resetToFeed(); }, [resetToFeed]);
+  const handleLogout = useCallback(() => { endSession(); setAccount(null); setScreen("feed"); }, []);
   // `deleteAccount` has already ended the session by the time this runs.
-  const handleDeleted = useCallback(() => { setShowDeleteModal(false); setAccount(null); resetToFeed(); }, [resetToFeed]);
+  const handleDeleted = useCallback(() => { setShowDeleteModal(false); setAccount(null); setScreen("feed"); }, []);
 
   if (!account) {
     return (
@@ -1097,10 +786,6 @@ export default function App() {
 
   return (
     <ThemeContext.Provider value={isDark}>
-      {/* Everything below can read the signed-in identity — that is how one
-          avatar change reaches the profile, the feed, comments and messages. */}
-      <SessionProvider account={account} onAccountChange={setAccount}>
-        <Suspense fallback={<div className="absolute inset-0 flex items-center justify-center bg-black text-white">Loading…</div>}>
       <div
         className={`h-[100dvh] w-full overflow-hidden${isDark ? " dark" : ""}`}
         style={{ background: isDark ? "#000" : "#f2f5fb", fontFamily: "'Plus Jakarta Sans', system-ui, sans-serif" }}
@@ -1112,125 +797,8 @@ export default function App() {
           onTouchEnd={(e) => { const d = touchStartY.current - e.changedTouches[0].clientY; if (Math.abs(d) > 45) d > 0 ? goNext() : goPrev(); }}
           onWheel={handleWheel}
         >
-          {/* ── Top bar ── sits above the slides so it survives an empty feed */}
-          <div className="absolute top-0 inset-x-0 flex items-center justify-between px-5 pt-12 z-20"
-            onClick={(e) => e.stopPropagation()}>
-            <div className="flex gap-5">
-              {([
-                { id: "following", label: "Following" },
-                { id: "forYou", label: "For You" },
-              ] as const).map((tab) => (
-                <div key={tab.id} className="flex flex-col items-center">
-                  <button onClick={() => switchTab(tab.id)}
-                    className="text-[14px]"
-                    style={{
-                      color: feedTab === tab.id ? "#fff" : "rgba(255,255,255,0.6)",
-                      fontWeight: feedTab === tab.id ? 700 : 600,
-                    }}>
-                    {tab.label}
-                  </button>
-                  {feedTab === tab.id && (
-                    <motion.div layoutId="feed-tab-underline" className="w-5 h-0.5 rounded-full mt-0.5"
-                      style={{ background: "#00AEEF" }} />
-                  )}
-                </div>
-              ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setScreen("notifications")} aria-label="Notifications"
-                className="w-8 h-8 rounded-full flex items-center justify-center relative"
-                style={{ background: "rgba(255,255,255,0.1)", backdropFilter: "blur(8px)" }}>
-                <Bell className="w-4 h-4 text-white" />
-                {unreadNotifications > 0 && (
-                  <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full flex items-center justify-center text-[9px] font-bold text-white"
-                    style={{ background: "#ef4444", boxShadow: "0 2px 8px rgba(239,68,68,0.5)" }}>
-                    {unreadNotifications > 9 ? "9+" : unreadNotifications}
-                  </span>
-                )}
-              </button>
-              <button onClick={() => setScreen("search")} aria-label="Search"
-                className="w-8 h-8 rounded-full flex items-center justify-center"
-                style={{ background: "rgba(255,255,255,0.1)", backdropFilter: "blur(8px)" }}>
-                <Search className="w-4 h-4 text-white" />
-              </button>
-            </div>
-          </div>
-
-          {/* ── First load ── the feed has been asked for and nothing is back
-              yet. A skeleton slide rather than a spinner, so the layout the
-              posts land into is already there. */}
-          {!video && feedStatus === "loading" && (
-            <div className="absolute inset-0 z-10" aria-busy="true" aria-label="Loading feed">
-              <motion.div
-                animate={{ opacity: [0.25, 0.45, 0.25] }} transition={{ duration: 1.6, repeat: Infinity }}
-                className="absolute inset-0"
-                style={{ background: "linear-gradient(160deg, rgba(0,174,239,0.18), rgba(124,58,237,0.12))" }} />
-              <div className="absolute right-3 bottom-28 flex flex-col items-center gap-5">
-                {[44, 28, 28, 52, 28, 28].map((size, i) => (
-                  <motion.div key={i} animate={{ opacity: [0.25, 0.5, 0.25] }}
-                    transition={{ duration: 1.6, repeat: Infinity, delay: i * 0.1 }}
-                    className="rounded-full" style={{ width: size, height: size, background: "rgba(255,255,255,0.22)" }} />
-                ))}
-              </div>
-              <div className="absolute left-4 bottom-28 right-20 space-y-2.5">
-                {[60, 88, 74].map((width, i) => (
-                  <motion.div key={i} animate={{ opacity: [0.25, 0.5, 0.25] }}
-                    transition={{ duration: 1.6, repeat: Infinity, delay: i * 0.12 }}
-                    className="h-3.5 rounded-full" style={{ width: `${width}%`, background: "rgba(255,255,255,0.22)" }} />
-                ))}
-              </div>
-              <div className="absolute inset-x-0 bottom-52 flex justify-center">
-                <span className="flex items-center gap-2 px-4 py-2 rounded-full text-[12px] font-semibold text-white"
-                  style={{ background: "rgba(0,0,0,0.45)", backdropFilter: "blur(8px)" }}>
-                  <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading your feed…
-                </span>
-              </div>
-            </div>
-          )}
-
-          {/* ── Failed to load ── nothing to show and a reason to say why ── */}
-          {!video && feedStatus === "error" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-10 text-center z-10">
-              <div className="w-14 h-14 rounded-full flex items-center justify-center"
-                style={{ background: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.4)" }}>
-                <WifiOff className="w-6 h-6" style={{ color: "#f87171" }} />
-              </div>
-              <p className="font-bold text-[16px]" style={{ color: isDark ? "#fff" : "#0a0e1a" }}>The feed didn't load</p>
-              <p className="text-[13px] leading-snug" style={{ color: isDark ? "rgba(255,255,255,0.55)" : "rgba(10,14,26,0.55)" }}>
-                {feedError}
-              </p>
-              <button onClick={reload}
-                className="mt-1 px-4 py-2 rounded-full text-[13px] font-bold text-white flex items-center gap-2"
-                style={{ background: "linear-gradient(135deg,#00AEEF,#0077cc)", boxShadow: "0 6px 18px rgba(0,174,239,0.35)" }}>
-                <RefreshCw className="w-3.5 h-3.5" /> Try again
-              </button>
-            </div>
-          )}
-
-          {/* ── Empty Following feed — every creator has been unfollowed ── */}
-          {!video && feedStatus === "ready" && (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-10 text-center z-10">
-              <div className="w-14 h-14 rounded-full flex items-center justify-center"
-                style={{ background: "rgba(0,174,239,0.15)", border: "1px solid rgba(0,174,239,0.4)" }}>
-                <User className="w-6 h-6" style={{ color: "#00AEEF" }} />
-              </div>
-              <p className="font-bold text-[16px]" style={{ color: isDark ? "#fff" : "#0a0e1a" }}>Nothing here yet</p>
-              <p className="text-[13px] leading-snug" style={{ color: isDark ? "rgba(255,255,255,0.55)" : "rgba(10,14,26,0.55)" }}>
-                {feedTab === "following"
-                  ? "Follow a few creators and their posts will show up in this tab."
-                  : "Post something and it will be the first thing here."}
-              </p>
-              <button onClick={() => (feedTab === "following" ? switchTab("forYou") : setCreating(true))}
-                className="mt-1 px-4 py-2 rounded-full text-[13px] font-bold text-white"
-                style={{ background: "linear-gradient(135deg,#00AEEF,#0077cc)", boxShadow: "0 6px 18px rgba(0,174,239,0.35)" }}>
-                {feedTab === "following" ? "Browse For You" : "Create a post"}
-              </button>
-            </div>
-          )}
-
           {/* ── Video slides ── */}
           <AnimatePresence initial={false} custom={dir} mode="wait">
-            {video && videoCreator && (
             <motion.div key={video.id} custom={dir}
               initial={{ y: dir > 0 ? "100%" : "-100%", opacity: 0.4 }}
               animate={{ y: 0, opacity: 1 }}
@@ -1240,7 +808,47 @@ export default function App() {
               onClick={() => setPaused((p) => !p)}
             >
               <div className="absolute inset-0 bg-cover bg-center" style={{ backgroundImage: `url(${video.thumbnail})` }} />
+
+              {/* YouTube video background */}
+              <YouTubePlayer
+                videoUrl={video.videoUrl}
+                username={video.username}
+                isActive={idx === feed.findIndex((v) => v.id === video.id)}
+                paused={paused}
+              />
+
               <div className="absolute inset-0" style={{ background: "linear-gradient(to bottom,rgba(0,0,0,0.25) 0%,transparent 25%,transparent 55%,rgba(0,0,0,0.65) 80%,rgba(0,0,0,0.85) 100%)" }} />
+
+              {/* Top bar */}
+              <div className="absolute top-0 inset-x-0 flex items-center justify-between px-5 pt-12 z-10"
+                onClick={(e) => e.stopPropagation()}>
+                <div className="flex gap-5">
+                  {([
+                    { id: "following", label: "Following" },
+                    { id: "forYou", label: "For You" },
+                  ] as const).map((tab) => (
+                    <div key={tab.id} className="flex flex-col items-center">
+                      <button onClick={() => switchTab(tab.id)}
+                        className="text-[14px]"
+                        style={{
+                          color: feedTab === tab.id ? "#fff" : "rgba(255,255,255,0.6)",
+                          fontWeight: feedTab === tab.id ? 700 : 600,
+                        }}>
+                        {tab.label}
+                      </button>
+                      {feedTab === tab.id && (
+                        <motion.div layoutId="feed-tab-underline" className="w-5 h-0.5 rounded-full mt-0.5"
+                          style={{ background: "#00AEEF" }} />
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <button onClick={() => setScreen("discover")} aria-label="Search"
+                  className="w-8 h-8 rounded-full flex items-center justify-center"
+                  style={{ background: "rgba(255,255,255,0.1)", backdropFilter: "blur(8px)" }}>
+                  <Search className="w-4 h-4 text-white" />
+                </button>
+              </div>
 
               <AnimatePresence>
                 {paused && (
@@ -1259,219 +867,60 @@ export default function App() {
                 </div>
               )}
 
-              <ActionRail video={video} creator={videoCreator!} liked={!!liked[video.id]} saved={!!saved[video.id]}
+              <ActionRail video={video} liked={!!liked[video.id]} saved={!!saved[video.id]}
                 onLike={() => setLiked((l) => ({ ...l, [video.id]: !l[video.id] }))}
                 onSave={() => setSaved((s) => ({ ...s, [video.id]: !s[video.id] }))}
-                onCollab={() => setCollabTarget(videoCreator!)}
+                onCollab={() => setCollabTarget(video)}
                 onComment={() => setCommentTarget(video)}
-                onShare={() => setShareTarget({
-                  subtitle: `@${videoCreator!.username}'s video`,
-                  url: `https://connexionz.app/v/${video.id}`,
-                })}
-                onOpenProfile={openProfile} />
+                onShare={() => setShareTarget(video)} />
 
-              <VideoInfo video={video} creator={videoCreator!} onOpenProfile={openProfile} />
+              <VideoInfo video={video} />
 
-              {/* Progress dots — a window around the current slide, because the
-                  feed pages in and a dot per post would run off the screen. */}
+              {/* Progress dots */}
               <div className="absolute right-4 top-1/2 -translate-y-1/2 flex flex-col gap-1.5 z-10">
-                {feed
-                  .map((v, i) => ({ v, i }))
-                  .slice(Math.max(0, Math.min(idx - 3, feed.length - 7)), Math.max(7, idx + 4))
-                  .map(({ v, i }) => (
-                    <button key={v.id}
-                      onClick={(e) => { e.stopPropagation(); setDir(i > idx ? 1 : -1); setIdx(i); }}
-                      className="rounded-full transition-all"
-                      style={{ width: 3, height: i === idx ? 20 : 6, background: i === idx ? "#00AEEF" : "rgba(255,255,255,0.3)" }} />
-                  ))}
-                {loadingMore && <Loader2 className="w-3 h-3 animate-spin mt-1" style={{ color: "#00AEEF" }} />}
+                {feed.map((v, i) => (
+                  <button key={v.id}
+                    onClick={(e) => { e.stopPropagation(); setDir(i > idx ? 1 : -1); setIdx(i); }}
+                    className="rounded-full transition-all"
+                    style={{ width: 3, height: i === idx ? 20 : 6, background: i === idx ? "#00AEEF" : "rgba(255,255,255,0.3)" }} />
+                ))}
               </div>
-
-              {/* ── End of feed ── said once, on the last slide there is ── */}
-              {reachedEnd && feedTab === "forYou" && idx === feed.length - 1 && (
-                <div className="absolute inset-x-0 bottom-[124px] flex justify-center z-10 px-10">
-                  <span className="px-4 py-2 rounded-full text-[11px] font-semibold text-white text-center"
-                    style={{ background: "rgba(0,0,0,0.45)", backdropFilter: "blur(8px)" }}>
-                    You're all caught up — check back later for more
-                  </span>
-                </div>
-              )}
             </motion.div>
-            )}
-          </AnimatePresence>
-          {/* ── Bottom nav ── the feed and your own profile are tabs, so the bar
-              stays visible on both (z-40 clears the profile at z-30). Pushed
-              screens — inbox, settings, a creator's profile — cover it, since
-              each one owns its own way back. */}
-          {(screen === "feed" || screen === "profile") && profileStack.length === 0 && (
-            <BottomNav
-              active={screen === "profile" ? "profile" : "home"}
-              onNav={(id) => {
-                if (id === "search") setScreen("search");
-                else if (id === "profile") { setProfileStack([]); setScreen("profile"); }
-                else if (id === "inbox") { setInboxThread(null); setScreen("inbox"); }
-                else if (id === "create") setCreating(true);
-                else setScreen("feed");
-              }}
-            />
-          )}
-
-          {/* ── Create menu ── the + tab now leads to both ways of publishing,
-              rather than assuming which one was meant. */}
-          <AnimatePresence>
-            {creating && (
-              <CreateSheet key="create"
-                onClose={() => setCreating(false)}
-                onUpload={() => { setCreating(false); setUploading(true); }}
-                onGoLive={() => { setCreating(false); setLiveMode("setup"); }} />
-            )}
           </AnimatePresence>
 
-          {/* ── Upload ── */}
-          <AnimatePresence>
-            {uploading && (
-              <UploadScreen key="upload"
-                onClose={() => setUploading(false)}
-                onPublished={(post) => {
-                  // The feed already re-renders from the store; this is the
-                  // record of it, so the notification list matches the profile.
-                  notify({
-                    type: "milestone",
-                    text: post.visibility === "private"
-                      ? "Saved to your profile — only you can see it"
-                      : "Your post is live. Views land in your dashboard within the hour.",
-                    postId: post.id,
-                  });
-                }}
-                onViewPost={(postId) => { setUploading(false); openPost(postId); }} />
-            )}
-          </AnimatePresence>
-
-          {/* ── Search / Discover ── */}
-          <AnimatePresence>
-            {screen === "search" && (
-              <motion.div key="search" className="absolute inset-0 z-30"
-                initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }}
-                transition={{ duration: 0.2 }}>
-                <SearchScreen
-                  onBack={() => setScreen("feed")}
-                  onOpenProfile={openProfile}
-                  onOpenPost={openPost}
-                  canOpenPost={canOpenPost}
-                  onOpenSounds={openSounds}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* ── Notifications ── */}
-          <AnimatePresence>
-            {screen === "notifications" && (
-              <motion.div key="notifications" className="absolute inset-0 z-30"
-                initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
-                <NotificationsScreen
-                  onBack={() => setScreen("feed")}
-                  onOpenProfile={openProfile}
-                  onOpenPost={openPost}
-                  canOpenPost={canOpenPost}
-                  onOpenThread={openThread}
-                  onOpenRequests={openRequests}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* ── Creator dashboard ── */}
-          <AnimatePresence>
-            {screen === "dashboard" && (
-              <motion.div key="dashboard" className="absolute inset-0 z-30"
-                initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
-                <DashboardScreen
-                  onBack={() => setScreen("profile")}
-                  onOpenPost={openPost}
-                  canOpenPost={canOpenPost}
-                  onSharePost={sharePost}
-                  onOpenRequests={openRequests}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
+          {/* ── Bottom nav ── */}
+          <BottomNav
+            active={screen === "discover" ? "search" : screen === "profile" ? "profile" : screen === "inbox" ? "inbox" : "home"}
+            onNav={(id) => {
+              if (id === "search") setScreen("discover");
+              else if (id === "profile") setScreen("profile");
+              else if (id === "inbox") setScreen("inbox");
+              else if (id === "create") setLiveMode("setup");
+              else setScreen("feed");
+            }}
+          />
 
           {/* ── Trending Sounds ── */}
           <AnimatePresence>
-            {screen === "discover" && (
-              <TrendingSounds key="sounds" initialSoundId={soundFocus}
-                onBack={() => { setSoundFocus(null); setScreen("search"); }} />
-            )}
+            {screen === "discover" && <TrendingSounds key="sounds" onBack={() => setScreen("feed")} />}
           </AnimatePresence>
 
           {/* ── Inbox ── */}
           <AnimatePresence>
-            {/* z-30 clears the feed's top bar, which is a positive-z sibling. */}
             {screen === "inbox" && (
-              <motion.div key="inbox" className="absolute inset-0 z-30"
-                initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
-                <InboxScreen
-                  onBack={() => { setInboxThread(null); setScreen("feed"); }}
-                  initialThreadWith={inboxThread}
-                  onOpenProfile={openProfile}
-                />
+              <motion.div key="inbox" initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
+                <InboxScreen onBack={() => setScreen("feed")} />
               </motion.div>
             )}
           </AnimatePresence>
 
-          {/* ── Your own profile ── the Profile tab. Settings is now a screen it
-              pushes rather than the thing the tab opened. */}
+          {/* ── Profile / Settings ── */}
           <AnimatePresence>
             {screen === "profile" && (
-              <motion.div key="own-profile" className="absolute inset-0 z-30"
-                initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 12 }}
-                transition={{ duration: 0.22 }}>
-                <OwnProfile
-                  onBack={() => setScreen("feed")}
-                  onEditProfile={() => openSettings("editProfile")}
-                  onOpenSettings={() => openSettings(null)}
-                  onOpenDashboard={() => setScreen("dashboard")}
-                  onOpenProfile={openProfile}
-                  onShare={shareProfile}
-                  onOpenPost={openPost}
-                  canOpenPost={canOpenPost}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* ── A creator's profile ── pushed over whatever opened it, so Back
-              returns to the feed slide, comment sheet or list you came from. */}
-          <AnimatePresence>
-            {visitedCreator && (
-              <motion.div key={`creator-${visitedCreator.id}`} className="absolute inset-0 z-40"
-                initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }}
-                transition={{ type: "spring", damping: 34, stiffness: 300 }}>
-                <ProfileScreen
-                  creator={visitedCreator}
-                  isOwner={false}
-                  onBack={closeProfile}
-                  onOpenProfile={openProfile}
-                  onMessage={messageCreator}
-                  onCollab={setCollabTarget}
-                  onShare={shareProfile}
-                  onOpenPost={openPost}
-                  canOpenPost={canOpenPost}
-                />
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* ── Settings ── */}
-          <AnimatePresence>
-            {screen === "settings" && (
-              <motion.div key="settings" className="absolute inset-0 z-30"
-                initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
+              <motion.div key="settings" initial={{ x: "100%" }} animate={{ x: 0 }} exit={{ x: "100%" }} transition={{ type: "spring", damping: 34, stiffness: 300 }}>
                 <SettingsScreen
                   account={account}
-                  initialRoute={settingsRoute}
-                  onBack={() => { setSettingsRoute(null); setScreen("profile"); }}
+                  onBack={() => setScreen("feed")}
                   onLogout={handleLogout}
                   onDeleteProfile={() => setShowDeleteModal(true)}
                   onAccountChange={setAccount}
@@ -1504,16 +953,9 @@ export default function App() {
                 <CommentSheet key="comment-sheet" video={commentTarget} comments={userComments[commentTarget.id] ?? []}
                   onAddComment={(text) => setUserComments((prev) => ({
                     ...prev,
-                    // Posted under the viewer's real handle and marked as theirs,
-                    // so the row renders their live avatar rather than a copy.
-                    // A paged-in post has no seeded thread, hence the `?? []`.
-                    [commentTarget.id]: [
-                      ...(prev[commentTarget.id] ?? []),
-                      { id: `u${Date.now()}`, username: viewerUsername, text, likes: 0, time: "now", mine: true },
-                    ],
+                    [commentTarget.id]: [...prev[commentTarget.id], { id: `u${Date.now()}`, username: "you", avatarUrl: "", text, likes: 0, time: "now" }],
                   }))}
-                  onClose={() => setCommentTarget(null)}
-                  onOpenProfile={openProfile} />
+                  onClose={() => setCommentTarget(null)} />
               </>
             )}
           </AnimatePresence>
@@ -1525,7 +967,7 @@ export default function App() {
                 <motion.div key="share-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
                   className="absolute inset-0 z-40" style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}
                   onClick={() => setShareTarget(null)} />
-                <ShareSheet key="share-sheet" target={shareTarget} onClose={() => setShareTarget(null)} />
+                <ShareSheet key="share-sheet" video={shareTarget} onClose={() => setShareTarget(null)} />
               </>
             )}
           </AnimatePresence>
@@ -1537,7 +979,7 @@ export default function App() {
                 <motion.div key="backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
                   className="absolute inset-0 z-40" style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}
                   onClick={() => setCollabTarget(null)} />
-                <CollabSheet key="sheet" creator={collabTarget} onClose={() => setCollabTarget(null)} />
+                <CollabSheet key="sheet" video={collabTarget} onClose={() => setCollabTarget(null)} />
               </>
             )}
           </AnimatePresence>
@@ -1573,115 +1015,6 @@ export default function App() {
           </AnimatePresence>
         </div>
       </div>
-      </Suspense>
-      </SessionProvider>
     </ThemeContext.Provider>
-  );
-}
-
-// ─── OWN PROFILE ──────────────────────────────────────────────────────────────
-
-/**
- * The signed-in creator's own profile. A separate component purely so it can use
- * the session hooks — `App` is what provides them.
- */
-function OwnProfile({
-  onBack, onEditProfile, onOpenSettings, onOpenDashboard, onOpenProfile, onShare, onOpenPost, canOpenPost,
-}: {
-  onBack: () => void;
-  onEditProfile: () => void;
-  onOpenSettings: () => void;
-  onOpenDashboard: () => void;
-  onOpenProfile: (username: string) => void;
-  onShare: (creator: Creator) => void;
-  onOpenPost: (postId: string) => void;
-  canOpenPost: (postId: string) => boolean;
-}) {
-  const creator = useOwnCreator();
-  return (
-    <ProfileScreen
-      creator={creator}
-      isOwner
-      onBack={onBack}
-      onEditProfile={onEditProfile}
-      onOpenSettings={onOpenSettings}
-      onOpenDashboard={onOpenDashboard}
-      onOpenProfile={onOpenProfile}
-      onShare={onShare}
-      onOpenPost={onOpenPost}
-      canOpenPost={canOpenPost}
-    />
-  );
-}
-
-// ─── CREATE SHEET ─────────────────────────────────────────────────────────────
-
-/**
- * What the + tab means. It used to mean "go live", which is only half of what
- * this app publishes — so the tab now asks, once, and both answers are one tap
- * away rather than one of them being unreachable.
- */
-function CreateSheet({
-  onClose, onUpload, onGoLive,
-}: {
-  onClose: () => void; onUpload: () => void; onGoLive: () => void;
-}) {
-  const isDark = useTheme();
-  const sheetBg = isDark
-    ? "linear-gradient(180deg,#1a1a22 0%,#14141a 100%)"
-    : "linear-gradient(180deg,#ffffff 0%,#f7f9ff 100%)";
-  const heading = isDark ? "#fff" : "#0a0e1a";
-  const sub = isDark ? "rgba(255,255,255,0.45)" : "rgba(10,14,26,0.45)";
-  const tileBg = isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)";
-  const tileBorder = isDark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.08)";
-
-  const options = [
-    {
-      id: "upload", label: "Upload a post", hint: "A video or photo from this device",
-      icon: <UploadIcon className="w-5 h-5 text-white" />, gradient: "linear-gradient(135deg,#00AEEF,#0077cc)",
-      onClick: onUpload,
-    },
-    {
-      id: "live", label: "Go live", hint: "Stream now, with collab requests open",
-      icon: <Radio className="w-5 h-5 text-white" />, gradient: "linear-gradient(135deg,#f472b6,#7c3aed)",
-      onClick: onGoLive,
-    },
-  ];
-
-  return (
-    <>
-      <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
-        className="absolute inset-0 z-40" style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}
-        onClick={onClose} />
-      <motion.div
-        initial={{ y: "100%" }} animate={{ y: 0 }} exit={{ y: "100%" }}
-        transition={{ type: "spring", damping: 34, stiffness: 320 }}
-        className="absolute inset-x-0 bottom-0 z-50 rounded-t-3xl pb-8"
-        style={{ background: sheetBg, border: isDark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.08)", borderBottom: "none" }}
-        role="dialog" aria-modal="true" aria-label="Create"
-      >
-        <div className="flex justify-center pt-3 pb-2">
-          <div className="w-9 h-1 rounded-full" style={{ background: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.12)" }} />
-        </div>
-        <p className="font-bold text-[16px] px-5 pb-1" style={{ color: heading }}>Create</p>
-        <p className="text-[12px] px-5 pb-4" style={{ color: sub }}>Both show up on your profile</p>
-        <div className="px-5 space-y-3">
-          {options.map((option) => (
-            <motion.button key={option.id} whileTap={{ scale: 0.98 }} onClick={option.onClick}
-              className="w-full flex items-center gap-3 p-4 rounded-2xl text-left"
-              style={{ background: tileBg, border: tileBorder }}>
-              <span className="w-11 h-11 rounded-2xl flex items-center justify-center flex-shrink-0"
-                style={{ background: option.gradient, boxShadow: "0 6px 18px rgba(0,174,239,0.3)" }}>
-                {option.icon}
-              </span>
-              <span className="flex-1 min-w-0">
-                <span className="block font-bold text-[15px]" style={{ color: heading }}>{option.label}</span>
-                <span className="block text-[12px] mt-0.5" style={{ color: sub }}>{option.hint}</span>
-              </span>
-            </motion.button>
-          ))}
-        </div>
-      </motion.div>
-    </>
   );
 }

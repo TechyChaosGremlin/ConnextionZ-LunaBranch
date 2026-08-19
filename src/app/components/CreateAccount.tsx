@@ -12,7 +12,7 @@ import {
     Checkbox, GUTTER, H1, Input, 
     isValidEmail, SCREEN, TOP_PAD, 
     SUB 
-} from "../auth-ui"
+} from "../Auth"
 
 import Logo        from "./ui/Logo"
 import PrimaryBtn  from "./ui/PrimaryBtn"
@@ -74,7 +74,10 @@ function CreateAccount({ onCreated, onLogin, onBack }: { onCreated: (account: Ac
 
         <AnimatePresence>
           {errors.general && (
-            <motion.div initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
+            <motion.div 
+            initial={{ opacity: 0, y: -8 }} 
+            animate={{ opacity: 1, y: 0  }} 
+            exit=   {{ opacity: 0, y: -8 }}
               className="flex items-center gap-3 px-4 py-3 rounded-2xl"
               style={{ background: "rgba(239,68,68,0.12)", border: "1px solid rgba(239,68,68,0.3)" }}>
               <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0" />

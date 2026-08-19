@@ -3,7 +3,6 @@
 import { useState } from "react";
 import { AlertCircle, Check } from "lucide-react";
 import { profileOf, updateProfile } from "../auth-store";
-import { validateProfilePatch } from "../profile-validation";
 import { ACCENT, Callout, Field, Group, PrimaryAction, Row, SubPage } from "../settings-ui";
 import type { PageProps } from "./settingsPages.types";
 
@@ -26,29 +25,7 @@ export function EditProfilePage({ account, t, onBack, onAccountChange }: PagePro
     bio !== current.bio || location !== current.location ||
     website !== current.website || avatarColor !== current.avatarColor;
 
-  const validationErrors = validateProfilePatch({
-    displayName,
-    username,
-    bio,
-    location,
-    website,
-  });
-  const firstValidationError = Object.values(validationErrors)[0];
-
   const handleSave = async () => {
-    const validation = validateProfilePatch({
-      displayName,
-      username,
-      bio,
-      location,
-      website,
-    });
-    const firstError = Object.values(validation)[0];
-    if (firstError) {
-      setError(firstError);
-      return;
-    }
-
     setSaving(true);
     setError("");
     const result = await updateProfile(account.email, {
@@ -67,7 +44,7 @@ export function EditProfilePage({ account, t, onBack, onAccountChange }: PagePro
   return (
     <SubPage title="Edit Profile" subtitle="How other creators see you" onBack={onBack} t={t}
       footer={
-        <PrimaryAction onClick={handleSave} disabled={(!dirty && !saved) || !!firstValidationError} loading={saving} done={saved}>
+        <PrimaryAction onClick={handleSave} disabled={!dirty && !saved} loading={saving} done={saved}>
           Save Changes
         </PrimaryAction>
       }>
@@ -98,15 +75,14 @@ export function EditProfilePage({ account, t, onBack, onAccountChange }: PagePro
       )}
 
       <Field label="Display name" value={displayName} onChange={setDisplayName}
-        placeholder="Maya Chen" maxLength={40} t={t} error={validationErrors.displayName} />
+        placeholder="Maya Chen" maxLength={40} t={t} />
       <Field label="Username" value={username} onChange={(v) => setUsername(v.toLowerCase())}
         placeholder="maya.creates" prefix="@" maxLength={24} t={t}
-        hint="3–24 characters. Letters, numbers, dots and underscores."
-        error={validationErrors.username} />
+        hint="3–24 characters. Letters, numbers, dots and underscores." />
       <Field label="Bio" value={bio} onChange={setBio} multiline rows={3} maxLength={160}
-        placeholder="What do you make, and who do you want to make it with?" t={t} error={validationErrors.bio} />
-      <Field label="Location" value={location} onChange={setLocation} placeholder="Los Angeles, CA" t={t} error={validationErrors.location} />
-      <Field label="Website" value={website} onChange={setWebsite} placeholder="yoursite.com" t={t} error={validationErrors.website} />
+        placeholder="What do you make, and who do you want to make it with?" t={t} />
+      <Field label="Location" value={location} onChange={setLocation} placeholder="Los Angeles, CA" t={t} />
+      <Field label="Website" value={website} onChange={setWebsite} placeholder="yoursite.com" t={t} />
 
       <Group label="Account" t={t}>
         <Row label="Email" right={<span className="text-[13px]" style={{ color: t.sub }}>{account.email}</span>} t={t} />

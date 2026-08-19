@@ -4,8 +4,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   ArrowLeft, Bookmark, TrendingUp, TrendingDown,
   Play, Music2, Share2, ChevronRight, Mic2,
-  X, Heart, MessageCircle, Navigation, Check, Send,
-  Users, Copy,
+  X, Heart, Navigation, Check, Send
 } from "lucide-react";
 import { fetchTrendingSounds } from "./profile-graphql";
 
