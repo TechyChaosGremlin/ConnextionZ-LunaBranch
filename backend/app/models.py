@@ -46,6 +46,7 @@ class Profile(Base):
     following: Mapped[int] = mapped_column(Integer, default=0)
 
     open_to_collab: Mapped[bool] = mapped_column(Boolean, default=True)
+    private_account: Mapped[bool] = mapped_column(Boolean, default=False)
     response_time: Mapped[str] = mapped_column(String(50), default="< 4 hours")
 
     user: Mapped[User] = relationship(back_populates="profile")

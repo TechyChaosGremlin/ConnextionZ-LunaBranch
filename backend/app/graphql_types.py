@@ -45,6 +45,7 @@ class ProfileSummary:
     followers: int = 0
     following: int = 0
     open_to_collab: bool = strawberry.field(name="openToCollab", default=True)
+    private_account: bool = strawberry.field(name="privateAccount", default=False)
     is_following: bool = strawberry.field(name="isFollowing", default=False)
 
 
@@ -175,6 +176,7 @@ class Profile:
     followers: int = 0
     following: int = 0
     open_to_collab: bool = strawberry.field(name="openToCollab")
+    private_account: bool = strawberry.field(name="privateAccount", default=False)
     response_time: str = strawberry.field(name="responseTime")
     posts: list[ContentItem]
     posts_page: PostPage = strawberry.field(name="postsPage")
@@ -193,3 +195,4 @@ class UpdateProfileInput:
     avatar_color: str | None = strawberry.field(name="avatarColor", default=None)
     collab_status: str | None = strawberry.field(name="collabStatus", default=None)
     open_to_collab: bool | None = strawberry.field(name="openToCollab", default=None)
+    private_account: bool | None = strawberry.field(name="privateAccount", default=None)

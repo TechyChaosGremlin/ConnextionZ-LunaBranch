@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "build": "vite build",
-    "dev": "vite"
+    "dev": "vite",
+    "api:server": "python -m uvicorn backend.app.main:app --host 127.0.0.1 --port 8002",
+    "api:test": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-backend-tests.ps1",
+    "api:test:full": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-backend-tests.ps1 -PytestArgs backend -q",
+    "api:test:unit": "powershell -NoProfile -ExecutionPolicy Bypass -File ./scripts/run-backend-tests.ps1 -PytestArgs backend/test_profile_lookup.py -q"
   },
   "dependencies": {
     "@emotion/react": "11.14.0",

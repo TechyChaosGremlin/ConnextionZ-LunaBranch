@@ -1,3 +1,5 @@
+import { BACKEND_API_URL } from "./api-config";
+
 // ─── ACCOUNT STORE ───────────────────────────────────────────────────────────
 //
 // ⚠️  PROTOTYPE CREDENTIAL STUB — THIS IS NOT AUTHENTICATION.
@@ -51,6 +53,7 @@ export interface Profile {
   bio: string;
   /** Hex used for the generated avatar, picked during onboarding. */
   avatarColor: string;
+  privateAccount: boolean;
   location: string;
   website: string;
 }
@@ -85,6 +88,8 @@ export const RESET_TTL_MS = 15 * 60 * 1000;
 
 export const PROVIDER_LABEL: Record<Provider, string> = { google: "Google", apple: "Apple" };
 
+const BACKEND_DELETE_ACCOUNT_ENDPOINT = `${BACKEND_API_URL}/auth/delete-account`;
+
 /** Seed account so the prototype is usable without registering first. */
 export const DEMO_ACCOUNT: Account = {
   firstName: "Maya",
@@ -97,6 +102,7 @@ export const DEMO_ACCOUNT: Account = {
     displayName: "Maya Chen",
     bio: "Producer & visual creator. Always down for a studio session 🎧",
     avatarColor: "#00AEEF",
+    privateAccount: false,
     location: "Los Angeles, CA",
     website: "connextionz.app/maya",
   },
@@ -113,6 +119,7 @@ export function defaultProfile(account: Account): Profile {
     displayName: `${account.firstName} ${account.lastName}`.trim() || handleFromEmail(account.email),
     bio: "",
     avatarColor: "#00AEEF",
+    privateAccount: false,
     location: "",
     website: "",
   };
@@ -159,6 +166,66 @@ const saveResets = (t: ResetToken[]) => write(RESETS_KEY, t);
 
 const findAccount = (accounts: Account[], email: string) =>
   accounts.find((a) => normalize(a.email) === normalize(email));
+
+async function tryBackendUpdateProfile(
+  patch: Partial<Profile>,
+): Promise<Result<Partial<Profile>> | null> {
+  try {
+    const response = await fetch(`${BACKEND_API_URL}/graphql`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({
+        query: `
+          mutation UpdateProfile($input: UpdateProfileInput!) {
+            updateProfile(input: $input) {
+              username
+              displayName
+              bio
+              avatarColor
+              privateAccount
+              location
+              website
+            }
+          }
+        `,
+        variables: { input: patch },
+      }),
+    });
+
+    if (response.status === 401) return null;
+
+    const json = await response.json().catch(() => null);
+    if (!response.ok || !json) {
+      return { ok: false, error: "Could not update your profile right now." };
+    }
+
+    const errors = Array.isArray(json.errors) ? json.errors : [];
+    if (errors.length) {
+      return { ok: false, error: errors[0]?.message || "Could not update your profile right now." };
+    }
+
+    const backendProfile = json.data?.updateProfile;
+    if (!backendProfile) {
+      return { ok: false, error: "Could not update your profile right now." };
+    }
+
+    return {
+      ok: true,
+      value: {
+        username: backendProfile.username,
+        displayName: backendProfile.displayName,
+        bio: backendProfile.bio ?? "",
+        avatarColor: backendProfile.avatarColor,
+        privateAccount: !!backendProfile.privateAccount,
+        location: backendProfile.location ?? "",
+        website: backendProfile.website ?? "",
+      },
+    };
+  } catch {
+    return null;
+  }
+}
 
 /** Opaque, non-guessable enough for a prototype. A real backend signs these. */
 function makeToken(): string {
@@ -365,6 +432,14 @@ export async function updateProfile(
   const account = findAccount(accounts, email);
   if (!account) return { ok: false, error: "That account no longer exists." };
 
+  const backend = await tryBackendUpdateProfile(patch);
+  if (backend) {
+    if (!backend.ok) return backend;
+    account.profile = { ...profileOf(account), ...backend.value };
+    saveAccounts(accounts);
+    return { ok: true, value: account };
+  }
+
   const next: Profile = { ...profileOf(account), ...patch };
   next.username = next.username.trim().replace(/^@/, "").toLowerCase();
 
@@ -430,6 +505,24 @@ export const hasPassword = (account: Account) => account.password !== undefined;
  */
 export async function deleteAccount(email: string): Promise<Result<null>> {
   await delay(1400);
+
+  // If the backend session is active, delete there first so server data
+  // (profile, posts, follows) is removed instead of just local draft state.
+  try {
+    const response = await fetch(BACKEND_DELETE_ACCOUNT_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({}),
+    });
+    if (response.ok) {
+      endSession();
+      return { ok: true, value: null };
+    }
+  } catch {
+    // Backend not reachable: continue with local prototype deletion behavior.
+  }
+
   const accounts = loadAccounts();
   const remaining = accounts.filter((a) => normalize(a.email) !== normalize(email));
   saveAccounts(remaining);

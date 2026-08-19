@@ -96,6 +96,7 @@ def register_user(
             followers=0,
             following=0,
             open_to_collab=True,
+            private_account=False,
             response_time="< 4 hours",
         )
         session.add(profile)
@@ -119,3 +120,16 @@ def get_user_profile(user_id: int) -> Profile | None:
             .where(Profile.user_id == user_id)
         ).scalar_one_or_none()
         return profile
+
+
+def delete_user_account(user_id: int) -> bool:
+    """Delete a user account and all related ORM-owned records."""
+    with get_session() as session:
+        user = session.execute(
+            select(User).where(User.id == user_id)
+        ).scalar_one_or_none()
+        if user is None:
+            return False
+        session.delete(user)
+        session.commit()
+        return True

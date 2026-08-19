@@ -116,6 +116,7 @@ def profile_to_graphql(profile: DbProfile, is_following: bool = False) -> Profil
         followers=profile.followers,
         following=profile.following,
         open_to_collab=profile.open_to_collab,
+        private_account=profile.private_account,
         response_time=profile.response_time,
         posts=recent_posts,
         posts_page=PostPage(items=recent_posts, next_cursor=str(page_size) if len(all_posts) > page_size else None),
@@ -165,7 +166,9 @@ def profile_summary(profile: DbProfile, is_following: bool = False) -> ProfileSu
         avatar_color=profile.avatar_color or "#00AEEF", verified=profile.verified,
         collab_score=profile.collab_score, collab_count=profile.collab_count,
         followers=profile.followers, following=profile.following,
-        open_to_collab=profile.open_to_collab, is_following=is_following,
+        open_to_collab=profile.open_to_collab,
+        private_account=profile.private_account,
+        is_following=is_following,
     )
 
 
@@ -185,6 +188,38 @@ def find_profile(session, identifier: str) -> DbProfile | None:
     ).scalar_one_or_none()
 
 
+def is_following_profile(session, viewer_id: int, target_user_id: int) -> bool:
+    return session.execute(
+        select(Follow.id).where(
+            Follow.follower_id == viewer_id,
+            Follow.following_id == target_user_id,
+        )
+    ).first() is not None
+
+
+def can_view_profile(session, viewer_id: int | None, profile: DbProfile) -> bool:
+    if not profile.private_account:
+        return True
+    if viewer_id is None:
+        return False
+    if viewer_id == profile.user_id:
+        return True
+    return is_following_profile(session, viewer_id, profile.user_id)
+
+
+def profile_visibility_filter(viewer_id: int | None):
+    visibility = [DbProfile.private_account.is_(False)]
+    if viewer_id is not None:
+        visibility.append(DbProfile.user_id == viewer_id)
+        visibility.append(
+            select(Follow.id).where(
+                Follow.follower_id == viewer_id,
+                Follow.following_id == DbProfile.user_id,
+            ).exists()
+        )
+    return or_(*visibility)
+
+
 def feed_item(post: DbPost, profile: DbProfile) -> FeedItem:
     return FeedItem(
         id=str(post.id), thumbnail=post.thumbnail, media_url=post.media_url,
@@ -201,16 +236,24 @@ def feed_item(post: DbPost, profile: DbProfile) -> FeedItem:
 
 def visible_post_filter(viewer_id: int | None):
     """Build the SQL predicate for posts the viewer is allowed to see."""
-    visibility = [DbPost.visibility == "public"]
-    if viewer_id is not None:
-        visibility.append(and_(
-            DbPost.visibility == "followers",
-            select(Follow.id).where(
-                Follow.follower_id == viewer_id,
-                Follow.following_id == DbProfile.user_id,
-            ).exists(),
-        ))
-    return or_(*visibility)
+    if viewer_id is None:
+        return and_(
+            DbPost.visibility == "public",
+            DbProfile.private_account.is_(False),
+        )
+
+    follows_author = select(Follow.id).where(
+        Follow.follower_id == viewer_id,
+        Follow.following_id == DbProfile.user_id,
+    ).exists()
+
+    return or_(
+        and_(DbPost.visibility == "public", DbProfile.private_account.is_(False)),
+        and_(DbPost.visibility == "public", DbProfile.user_id == viewer_id),
+        and_(DbPost.visibility == "public", DbProfile.private_account.is_(True), follows_author),
+        and_(DbPost.visibility == "followers", follows_author),
+        and_(DbPost.visibility == "followers", DbProfile.user_id == viewer_id),
+    )
 
 
 @strawberry.type
@@ -229,32 +272,28 @@ class Query:
 
     @strawberry.field
     def profile(self, username: str, info: Info) -> Profile | None:
-        """Fetch any user's public profile by username."""
+        """Fetch any user's public profile by username or numeric profile ID."""
         with get_session() as session:
-            profile = session.execute(
-                select(DbProfile).where(DbProfile.username == username)
-            ).scalar_one_or_none()
+            profile = find_profile(session, username)
             if profile is None:
                 return None
             user_id = info.context.get("user_id")
+            if not can_view_profile(session, user_id, profile):
+                return None
             is_following = False
             if user_id is not None and user_id != profile.user_id:
-                is_following = session.execute(
-                    select(Follow.id).where(
-                        Follow.follower_id == user_id,
-                        Follow.following_id == profile.user_id,
-                    )
-                ).first() is not None
+                is_following = is_following_profile(session, user_id, profile.user_id)
             return profile_to_graphql(profile, is_following=is_following)
 
     @strawberry.field(name="searchProfiles")
-    def search_profiles(self, query: str, limit: int = 20) -> list[ProfileSummary]:
+    def search_profiles(self, query: str, info: Info, limit: int = 20) -> list[ProfileSummary]:
         """Search public profiles by username or display name."""
         terms = [term for term in query.strip().split() if term]
         if not terms:
             return []
         search = "%" + "%".join(terms) + "%"
         page_size = max(1, min(limit, 50))
+        user_id = info.context.get("user_id")
         with get_session() as session:
             profiles = session.execute(
                 select(DbProfile)
@@ -262,19 +301,22 @@ class Query:
                     func.lower(DbProfile.username).like(search.lower()),
                     func.lower(DbProfile.display_name).like(search.lower()),
                 ))
+                .where(profile_visibility_filter(user_id))
                 .order_by(DbProfile.followers.desc(), DbProfile.username)
                 .limit(page_size)
             ).scalars().all()
             return [profile_summary(profile) for profile in profiles]
 
     @strawberry.field(name="suggestedProfiles")
-    def suggested_profiles(self, limit: int = 6) -> list[ProfileSummary]:
+    def suggested_profiles(self, info: Info, limit: int = 6) -> list[ProfileSummary]:
         """Return public profiles ranked for collaboration discovery."""
         page_size = max(1, min(limit, 20))
+        user_id = info.context.get("user_id")
         with get_session() as session:
             profiles = session.execute(
                 select(DbProfile)
                 .where(DbProfile.open_to_collab.is_(True))
+                .where(profile_visibility_filter(user_id))
                 .order_by(DbProfile.collab_score.desc(), DbProfile.followers.desc())
                 .limit(page_size)
             ).scalars().all()
@@ -378,6 +420,8 @@ class Query:
             profile = find_profile(session, username)
             if profile is None:
                 return PostPage(items=[], next_cursor=None)
+            if not can_view_profile(session, viewer_id, profile):
+                return PostPage(items=[], next_cursor=None)
             page_size = max(1, min(limit, 50))
             offset = 0
             if after:
@@ -418,10 +462,12 @@ class Query:
             ] if profile else []
 
     @strawberry.field
-    def followers(self, username: str) -> list[ProfileSummary]:
+    def followers(self, username: str, info: Info) -> list[ProfileSummary]:
         with get_session() as session:
             profile = find_profile(session, username)
             if profile is None:
+                return []
+            if not can_view_profile(session, info.context.get("user_id"), profile):
                 return []
             profiles = session.execute(
                 select(DbProfile)
@@ -431,10 +477,12 @@ class Query:
             return [profile_summary(item) for item in profiles]
 
     @strawberry.field
-    def following(self, username: str) -> list[ProfileSummary]:
+    def following(self, username: str, info: Info) -> list[ProfileSummary]:
         with get_session() as session:
             profile = find_profile(session, username)
             if profile is None:
+                return []
+            if not can_view_profile(session, info.context.get("user_id"), profile):
                 return []
             profiles = session.execute(
                 select(DbProfile)
@@ -485,6 +533,8 @@ class Query:
             profile = find_profile(session, username)
             if profile is None:
                 return ProfilePage(profiles=[], next_cursor=None)
+            if not can_view_profile(session, info.context.get("user_id"), profile):
+                return ProfilePage(profiles=[], next_cursor=None)
             user_id = profile.user_id
         return Query._follow_page(user_id, True, after, limit, viewer_id=info.context.get("user_id"))
 
@@ -493,6 +543,8 @@ class Query:
         with get_session() as session:
             profile = find_profile(session, username)
             if profile is None:
+                return ProfilePage(profiles=[], next_cursor=None)
+            if not can_view_profile(session, info.context.get("user_id"), profile):
                 return ProfilePage(profiles=[], next_cursor=None)
             user_id = profile.user_id
         return Query._follow_page(user_id, False, after, limit, viewer_id=info.context.get("user_id"))
@@ -610,6 +662,8 @@ class Mutation:
                 profile.collab_status = input.collab_status
             if input.open_to_collab is not None:
                 profile.open_to_collab = input.open_to_collab
+            if input.private_account is not None:
+                profile.private_account = input.private_account
 
             session.commit()
             session.refresh(profile)

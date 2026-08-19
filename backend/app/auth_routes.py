@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 
-from backend.app.auth import authenticate_user, get_user_profile, register_user
+from backend.app.auth import authenticate_user, delete_user_account, get_user_profile, register_user
 
 
 def create_auth_router(limiter) -> APIRouter:
@@ -66,6 +66,19 @@ def create_auth_router(limiter) -> APIRouter:
     async def logout(request: Request):
         """Log out by clearing the session."""
         request.session.clear()
+        return {"ok": True}
+
+    @router.post("/auth/delete-account")
+    @limiter.limit("3/minute")
+    async def delete_account(request: Request):
+        """Delete the authenticated account and clear the session."""
+        user_id = request.session.get("user_id")
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Not authenticated")
+        deleted = delete_user_account(user_id)
+        request.session.clear()
+        if not deleted:
+            raise HTTPException(status_code=404, detail="Account not found")
         return {"ok": True}
 
     return router

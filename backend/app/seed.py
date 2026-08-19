@@ -33,6 +33,7 @@ def seed_database() -> None:
             followers=48200,
             following=621,
             open_to_collab=True,
+            private_account=False,
             response_time="< 4 hours",
         )
         session.add(profile)

@@ -198,11 +198,25 @@ def main():
     ))["unfollow"]
     assert duplicate_unfollow == {"following": False, "followers": 0, "followingCount": 0}
 
-    print("6. Logout and reject protected requests")
-    logout = request_json(authenticated, "/auth/logout", {})
-    assert logout["ok"] is True
-    after_logout = graphql(authenticated, me_query)
-    assert after_logout["data"]["me"] is None
+    print("6. Delete account")
+    deleted = request_json(authenticated, "/auth/delete-account", {})
+    assert deleted["ok"] is True
+
+    after_delete_me = graphql(authenticated, me_query)
+    assert after_delete_me["data"]["me"] is None
+
+    login_after_delete = request_json(anonymous, "/auth/login", {
+        "email": email,
+        "password": password,
+    }, expected_status=401)
+    assert login_after_delete.get("detail") == "Invalid credentials"
+
+    deleted_profile = assert_graphql_success(graphql(
+        anonymous, public_profile_query, {"username": username}
+    ))["profile"]
+    assert deleted_profile is None
+
+    print("7. Reject protected requests")
 
     protected_update = graphql(anonymous, update_query, {"input": {"bio": "must fail"}})
     assert protected_update.get("errors"), protected_update
@@ -211,7 +225,7 @@ def main():
     protected_follow = graphql(anonymous, follow_query, {"username": "luna"})
     assert protected_follow.get("errors"), protected_follow
 
-    print("7. Reject duplicate email and username")
+    print("8. Reject duplicate email and username")
     duplicate_email = request_json(anonymous, "/auth/register", {
         "email": email,
         "password": password,

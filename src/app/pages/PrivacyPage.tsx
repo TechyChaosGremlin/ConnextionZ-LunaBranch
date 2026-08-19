@@ -1,6 +1,8 @@
 // ─── PRIVACY SETTINGS ────────────────────────────────────────────────────────
 
-import { Shield } from "lucide-react";
+import { useState } from "react";
+import { AlertCircle, Shield } from "lucide-react";
+import { updateProfile } from "../auth-store";
 import type { Audience } from "../settings-store";
 import { AUDIENCE_OPTIONS } from "../settings-store";
 import { Callout, ChoiceRow, Group, SubPage, ToggleRow } from "../settings-ui";
@@ -20,15 +22,36 @@ function AudienceGroup({ label, hint, value, onChange, t }: {
   );
 }
 
-export function PrivacyPage({ prefs, t, onBack, onPatch }: PageProps) {
+export function PrivacyPage({ account, prefs, t, onBack, onPatch, onAccountChange }: PageProps) {
   const p = prefs.privacy;
   const set = (patch: Partial<typeof p>) => onPatch({ privacy: { ...p, ...patch } });
+  const [error, setError] = useState("");
+
+  const setPrivateAccount = async (value: boolean) => {
+    const previous = p.privateAccount;
+    setError("");
+    set({ privateAccount: value });
+
+    const result = await updateProfile(account.email, { privateAccount: value });
+    if (!result.ok) {
+      set({ privateAccount: previous });
+      setError(result.error);
+      return;
+    }
+    onAccountChange(result.value);
+  };
 
   return (
     <SubPage title="Privacy Settings" subtitle="Who can see you and reach you" onBack={onBack} t={t}>
+      {error && (
+        <Callout icon={<AlertCircle className="w-4 h-4" />} tone="warn" t={t}>
+          <span className="text-red-400">{error}</span>
+        </Callout>
+      )}
+
       <Group label="Account" hint="A private account still appears in Discover unless you also turn off discoverability below." t={t}>
         <ToggleRow label="Private account" sub="Only approved followers see your posts" last
-          value={p.privateAccount} onChange={(v) => set({ privateAccount: v })} t={t} />
+          value={p.privateAccount} onChange={setPrivateAccount} t={t} />
       </Group>
 
       <AudienceGroup label="Who can message you" value={p.whoCanMessage}

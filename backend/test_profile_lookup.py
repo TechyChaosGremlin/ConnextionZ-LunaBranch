@@ -12,7 +12,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from backend.app.main import AVATAR_TYPES, MAX_AVATAR_BYTES, Mutation, PostInput, find_profile, parse_int_id, store_upload
-from backend.app.models import Base, Media, Profile, User
+from backend.app.main import Query
+from backend.app.graphql_types import UpdateProfileInput
+from backend.app.models import Base, Follow, Media, Profile, User
 
 
 class FindProfileTests(unittest.TestCase):
@@ -106,6 +108,220 @@ class FindProfileTests(unittest.TestCase):
                     thumbnail_media_id=owned_thumbnail_id,
                 ), info)
         self.assertEqual(error.exception.extensions["code"], "NOT_FOUND")
+
+
+class ProfileQueryMutationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        self.session = Session(engine)
+
+        # Target account and followers used by pagination tests.
+        self.target = User(email="target@example.test")
+        self.viewer = User(email="viewer@example.test")
+        self.follower_one = User(email="follower1@example.test")
+        self.follower_two = User(email="follower2@example.test")
+        self.follower_three = User(email="follower3@example.test")
+
+        # Accounts used by suggested profile ordering and username conflict checks.
+        self.editor = User(email="editor@example.test")
+        self.other_editor = User(email="other-editor@example.test")
+        self.session.add_all([
+            self.target,
+            self.viewer,
+            self.follower_one,
+            self.follower_two,
+            self.follower_three,
+            self.editor,
+            self.other_editor,
+        ])
+        self.session.flush()
+
+        self.target_profile = Profile(
+            user_id=self.target.id,
+            username="target",
+            display_name="Target",
+        )
+        self.viewer_profile = Profile(
+            user_id=self.viewer.id,
+            username="viewer",
+            display_name="Viewer",
+        )
+        self.follower_profile_one = Profile(
+            user_id=self.follower_one.id,
+            username="follower.one",
+            display_name="Follower One",
+            collab_score=4.4,
+            followers=100,
+            open_to_collab=True,
+        )
+        self.follower_profile_two = Profile(
+            user_id=self.follower_two.id,
+            username="follower.two",
+            display_name="Follower Two",
+            collab_score=4.4,
+            followers=60,
+            open_to_collab=True,
+        )
+        self.follower_profile_three = Profile(
+            user_id=self.follower_three.id,
+            username="follower.three",
+            display_name="Follower Three",
+            collab_score=4.9,
+            followers=20,
+            open_to_collab=True,
+        )
+        self.editor_profile = Profile(
+            user_id=self.editor.id,
+            username="edit.me",
+            display_name="Edit Me",
+            collab_score=4.6,
+            followers=250,
+            open_to_collab=True,
+            bio="before",
+            location="old-town",
+            website="https://old.example.test",
+        )
+        self.other_editor_profile = Profile(
+            user_id=self.other_editor.id,
+            username="taken.name",
+            display_name="Taken Name",
+            collab_score=5.0,
+            followers=1,
+            open_to_collab=False,
+        )
+        self.private_owner = User(email="private-owner@example.test")
+        self.private_follower = User(email="private-follower@example.test")
+        self.session.add_all([self.private_owner, self.private_follower])
+        self.session.flush()
+
+        self.private_owner_profile = Profile(
+            user_id=self.private_owner.id,
+            username="private.owner",
+            display_name="Private Owner",
+            private_account=True,
+        )
+        self.private_follower_profile = Profile(
+            user_id=self.private_follower.id,
+            username="private.follower",
+            display_name="Private Follower",
+        )
+
+        self.session.add_all([
+            self.target_profile,
+            self.viewer_profile,
+            self.follower_profile_one,
+            self.follower_profile_two,
+            self.follower_profile_three,
+            self.editor_profile,
+            self.other_editor_profile,
+            self.private_owner_profile,
+            self.private_follower_profile,
+        ])
+        self.session.flush()
+
+        self.session.add_all([
+            Follow(follower_id=self.follower_one.id, following_id=self.target.id),
+            Follow(follower_id=self.follower_two.id, following_id=self.target.id),
+            Follow(follower_id=self.follower_three.id, following_id=self.target.id),
+            # Viewer follows follower_two so isFollowing can be asserted per row.
+            Follow(follower_id=self.viewer.id, following_id=self.follower_two.id),
+            Follow(follower_id=self.private_follower.id, following_id=self.private_owner.id),
+        ])
+        self.session.commit()
+
+    def tearDown(self) -> None:
+        self.session.close()
+
+    def test_suggested_profiles_rank_and_filter_open_to_collab(self) -> None:
+        info = SimpleNamespace(context={"user_id": None})
+        with patch("backend.app.main.get_session", return_value=self.session):
+            rows = Query().suggested_profiles(info, limit=4)
+
+        usernames = [row.username for row in rows]
+        # Ranked by score descending, then followers descending.
+        self.assertEqual(
+            usernames[:4],
+            ["follower.three", "edit.me", "follower.one", "follower.two"],
+        )
+        self.assertNotIn("taken.name", usernames)
+
+    def test_followers_page_paginates_and_sets_is_following(self) -> None:
+        info = SimpleNamespace(context={"user_id": self.viewer.id})
+        with patch("backend.app.main.get_session", return_value=self.session):
+            first_page = Query().followers_page("target", info, limit=2)
+            second_page = Query().followers_page("target", info, after=first_page.next_cursor, limit=2)
+
+        self.assertEqual([profile.username for profile in first_page.profiles], ["follower.one", "follower.two"])
+        self.assertEqual(first_page.next_cursor, "2")
+        self.assertEqual([profile.is_following for profile in first_page.profiles], [False, True])
+        self.assertEqual([profile.username for profile in second_page.profiles], ["follower.three"])
+        self.assertIsNone(second_page.next_cursor)
+
+    def test_profile_query_accepts_numeric_profile_id(self) -> None:
+        info = SimpleNamespace(context={"user_id": None})
+        with patch("backend.app.main.get_session", return_value=self.session):
+            profile = Query().profile(str(self.target_profile.id), info)
+
+        self.assertIsNotNone(profile)
+        self.assertEqual(profile.username, "target")
+        self.assertEqual(profile.display_name, "Target")
+
+    def test_private_profile_hidden_from_non_follower(self) -> None:
+        anonymous = SimpleNamespace(context={"user_id": None})
+        follower = SimpleNamespace(context={"user_id": self.private_follower.id})
+
+        with patch("backend.app.main.get_session", return_value=self.session):
+            hidden = Query().profile("private.owner", anonymous)
+            visible = Query().profile("private.owner", follower)
+
+        self.assertIsNone(hidden)
+        self.assertIsNotNone(visible)
+        self.assertEqual(visible.username, "private.owner")
+
+    def test_update_profile_normalizes_username_and_persists_fields(self) -> None:
+        info = SimpleNamespace(context={"user_id": self.editor.id})
+        with patch("backend.app.main.get_session", return_value=self.session):
+            updated = Mutation().update_profile(UpdateProfileInput(
+                username="@Editor.New",
+                display_name="Editor Updated",
+                bio="updated bio",
+                location="new-town",
+            ), info)
+
+        self.assertEqual(updated.username, "editor.new")
+        self.assertEqual(updated.display_name, "Editor Updated")
+        self.assertEqual(updated.bio, "updated bio")
+        self.assertEqual(updated.location, "new-town")
+
+        reloaded = self.session.get(Profile, self.editor_profile.id)
+        self.assertIsNotNone(reloaded)
+        self.assertEqual(reloaded.username, "editor.new")
+        self.assertEqual(reloaded.display_name, "Editor Updated")
+
+    def test_update_profile_rejects_invalid_or_taken_username(self) -> None:
+        info = SimpleNamespace(context={"user_id": self.editor.id})
+
+        with patch("backend.app.main.get_session", return_value=self.session):
+            with self.assertRaises(GraphQLError) as invalid_error:
+                Mutation().update_profile(UpdateProfileInput(username="bad name with spaces"), info)
+        self.assertEqual(invalid_error.exception.extensions["code"], "VALIDATION_ERROR")
+
+        with patch("backend.app.main.get_session", return_value=self.session):
+            with self.assertRaises(GraphQLError) as conflict_error:
+                Mutation().update_profile(UpdateProfileInput(username="taken.name"), info)
+        self.assertEqual(conflict_error.exception.extensions["code"], "CONFLICT")
+
+    def test_update_profile_can_toggle_private_account(self) -> None:
+        info = SimpleNamespace(context={"user_id": self.editor.id})
+        with patch("backend.app.main.get_session", return_value=self.session):
+            updated = Mutation().update_profile(UpdateProfileInput(private_account=True), info)
+
+        self.assertTrue(updated.private_account)
+
+        reloaded = self.session.get(Profile, self.editor_profile.id)
+        self.assertIsNotNone(reloaded)
+        self.assertTrue(reloaded.private_account)
 
 
 if __name__ == "__main__":
