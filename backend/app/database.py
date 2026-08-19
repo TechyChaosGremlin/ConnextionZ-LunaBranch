@@ -3,8 +3,6 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from alembic import command
-from alembic.config import Config
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import Session
 
@@ -28,6 +26,9 @@ def enable_sqlite_foreign_keys(dbapi_connection, connection_record):
     cursor.close()
 
 def run_migrations() -> None:
+    from alembic import command
+    from alembic.config import Config
+
     config = Config(str(ALEMBIC_CONFIG_PATH))
     config.set_main_option("sqlalchemy.url", DATABASE_URL)
     existing_tables = set(inspect(engine).get_table_names())
@@ -35,9 +36,6 @@ def run_migrations() -> None:
     if required_tables.issubset(existing_tables) and "alembic_version" not in existing_tables:
         command.stamp(config, "head")
     command.upgrade(config, "head")
-
-
-run_migrations()
 
 
 def get_session() -> Session:

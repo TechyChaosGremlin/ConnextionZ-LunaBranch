@@ -4,6 +4,7 @@ import os
 import re
 import logging
 import time
+from contextlib import asynccontextmanager
 from typing import Optional
 
 import strawberry
@@ -25,7 +26,7 @@ from slowapi.util import get_remote_address
 
 from backend.app.auth import get_user_profile, AuthContext
 from backend.app.auth_routes import create_auth_router
-from backend.app.database import get_session
+from backend.app.database import get_session, run_migrations
 from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, Profile as DbProfile, Sound as DbSound, User
 from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
 from backend.app.media_routes import create_media_router
@@ -58,9 +59,6 @@ def parse_int_id(raw_id: object, field_name: str = "ID") -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise api_error(f"Invalid {field_name}: expected a numeric ID", "VALIDATION_ERROR", 400) from exc
-
-
-seed_database()
 
 
 def sound_to_graphql(sound: DbSound) -> SoundResult:
@@ -749,7 +747,16 @@ def get_context_for_request(request: Request):
 
 
 graphql_app = GraphQLRouter(schema, context_getter=get_context_for_request)
-app = FastAPI(title="ConnextionZ Profile API")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    run_migrations()
+    seed_database()
+    yield
+
+
+app = FastAPI(title="ConnextionZ Profile API", lifespan=lifespan)
 
 rate_limit_enabled = os.getenv("RATE_LIMIT_ENABLED", "true").lower() not in {"0", "false", "no"}
 limiter = Limiter(
