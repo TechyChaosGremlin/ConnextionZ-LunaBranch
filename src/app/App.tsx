@@ -82,6 +82,27 @@ const VIDEOS = [
     thumbnail: "https://images.unsplash.com/photo-1540569876291-7b03b5441327?w=600&h=1066&fit=crop&auto=format",
     videoUrl: "https://www.youtube.com/embed/xBasQG_6p40",
   },
+  {
+
+    id: "6",
+    username: "xander.djs",
+    avatarUrl:
+        "https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?w=100&h=100&fit=crop&auto=format",
+    caption:
+        "Live from the booth tonight — this drop goes HARD. Turn it up 🔊🎧",
+    hashtags: ["#dj", "#electronicmusic", "#setlife", "#live"],
+    audio: "MIDNIGHT PULSE — xander.djs",
+    collabStatus: "Available for Collaboration",
+    collabScore: 4.8,
+    collabCount: 412,
+    likes: 764300,
+    comments: 9340,
+    shares: 38900,
+    saves: 27400,
+    thumbnail:
+        "https://images.unsplash.com/photo-1516280440614-37939bbacd81?w=600&h=1066&fit=crop&auto=format",
+    videoUrl: "https://www.youtube.com/embed/UwLp-15miww",
+  }
 ];
 
 // ─── COMMENTS DATA ───────────────────────────────────────────────────────────
@@ -451,7 +472,7 @@ function ActionRail({
   onLike: () => void; onSave: () => void; onCollab: () => void; onComment: () => void; onShare: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center gap-5 absolute right-3 top-1/2 -translate-y-1/2 z-10">
+    <div className="flex flex-col items-center gap-5 lg:gap-6 absolute right-6 lg:right-8 top-1/2 -translate-y-1/2 z-10">
       <div className="relative mb-1">
         <img src={video.avatarUrl} alt={video.username} className="w-11 h-11 rounded-full object-cover border-2 border-white" />
         <div className="absolute -bottom-2 left-1/2 -translate-x-1/2 w-5 h-5 rounded-full flex items-center justify-center text-white text-xs font-bold"

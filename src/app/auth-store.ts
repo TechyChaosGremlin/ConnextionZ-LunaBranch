@@ -310,23 +310,43 @@ export async function resetPassword(token: string, newPassword: string): Promise
 // profile edit in one tab is never served stale from a cached copy. A real
 // backend swaps this for an httpOnly session cookie — `getSession()` becomes
 // `GET /me` and the rest of the app is unchanged.
+//
+// Session uses sessionStorage so the user is automatically logged out when
+// they close the tab or browser (exit the app).
 
 /** The signed-in account, or null when signed out / the account is gone. */
 export function getSession(): Account | null {
-  const email = read<string | null>(SESSION_KEY, null);
+  const email = sessionRead<string | null>(SESSION_KEY, null);
   if (!email || typeof email !== "string") return null;
   return findAccount(loadAccounts(), email) ?? null;
 }
 
 export function startSession(email: string) {
-  write(SESSION_KEY, normalize(email));
+  sessionWrite(SESSION_KEY, normalize(email));
 }
 
 export function endSession() {
   try {
-    localStorage.removeItem(SESSION_KEY);
+    sessionStorage.removeItem(SESSION_KEY);
   } catch {
     /* Storage disabled — nothing was persisted to clear. */
+  }
+}
+
+function sessionRead<T>(key: string, fallback: T): T {
+  try {
+    const raw = sessionStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as T) : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function sessionWrite(key: string, value: unknown) {
+  try {
+    sessionStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    /* Non-fatal: storage disabled means the session just will not persist. */
   }
 }
 
