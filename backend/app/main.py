@@ -24,7 +24,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from backend.app.auth import get_user_profile, AuthContext
+from backend.app.auth import delete_user_account, get_user_profile, AuthContext
 from backend.app.auth_routes import create_auth_router
 from backend.app.database import get_session, run_migrations
 from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, PostLike, Profile as DbProfile, Sound as DbSound, User
@@ -652,6 +652,26 @@ class Query:
 
 @strawberry.type
 class Mutation:
+    def _delete_account(self, info: Info) -> bool:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in", "UNAUTHENTICATED", 401)
+        if not delete_user_account(user_id):
+            raise api_error("Account not found", "NOT_FOUND", 404)
+
+        request = info.context.get("request")
+        if request is not None:
+            request.session.clear()
+        return True
+
+    @strawberry.mutation(name="deleteAccount")
+    def delete_account(self, info: Info) -> bool:
+        return self._delete_account(info)
+
+    @strawberry.mutation(name="deleteProfile")
+    def delete_profile(self, info: Info) -> bool:
+        return self._delete_account(info)
+
     @strawberry.field
     def update_profile(self, input: UpdateProfileInput, info: Info) -> Profile | None:
         """Update the logged-in user's profile. Only the owner can edit."""
