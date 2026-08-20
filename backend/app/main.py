@@ -15,8 +15,9 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from sqlalchemy import String, and_, cast, func, or_, select
+from sqlalchemy import String, and_, cast, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import selectinload
 from strawberry.fastapi import GraphQLRouter
 from strawberry.types import Info
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -99,9 +100,16 @@ def refresh_post_like_count(session, post_id: int) -> int:
     return post.likes
 
 
-def post_to_graphql(post: DbPost, viewer_id: int | None = None) -> ContentItem:
-    with get_session() as session:
-        liked = is_post_liked(session, viewer_id, post.id)
+def post_to_graphql(
+    post: DbPost,
+    viewer_id: int | None = None,
+    liked_post_ids: set[int] | None = None,
+) -> ContentItem:
+    if liked_post_ids is None:
+        with get_session() as session:
+            liked = is_post_liked(session, viewer_id, post.id)
+    else:
+        liked = post.id in liked_post_ids
     return ContentItem(
         id=str(post.id), thumbnail=post.thumbnail, media_url=post.media_url,
         caption=post.caption or "", views=post.views, likes=post.likes,
@@ -114,8 +122,27 @@ def post_to_graphql(post: DbPost, viewer_id: int | None = None) -> ContentItem:
     )
 
 
-def profile_to_graphql(profile: DbProfile, is_following: bool = False, viewer_id: int | None = None) -> Profile:
-    all_posts = [post_to_graphql(post, viewer_id=viewer_id) for post in profile.posts]
+def liked_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[int]:
+    if viewer_id is None or not posts:
+        return set()
+    return set(session.scalars(
+        select(PostLike.post_id).where(
+            PostLike.user_id == viewer_id,
+            PostLike.post_id.in_([post.id for post in posts]),
+        )
+    ).all())
+
+
+def profile_to_graphql(
+    profile: DbProfile,
+    is_following: bool = False,
+    viewer_id: int | None = None,
+    liked_post_ids: set[int] | None = None,
+) -> Profile:
+    all_posts = [
+        post_to_graphql(post, viewer_id=viewer_id, liked_post_ids=liked_post_ids)
+        for post in profile.posts
+    ]
     page_size = 12
     recent_posts = all_posts[:page_size]
     playlists = [
@@ -157,7 +184,10 @@ def profile_to_graphql(profile: DbProfile, is_following: bool = False, viewer_id
 
 def load_profile_from_db(username: str | None = None) -> DbProfile | None:
     with get_session() as session:
-        stmt = select(DbProfile)
+        stmt = select(DbProfile).options(
+            selectinload(DbProfile.posts),
+            selectinload(DbProfile.playlists),
+        )
         if username is not None:
             stmt = stmt.where(DbProfile.username == username)
         profile = session.execute(stmt).scalars().first()
@@ -250,9 +280,17 @@ def profile_visibility_filter(viewer_id: int | None):
     return or_(*visibility)
 
 
-def feed_item(post: DbPost, profile: DbProfile, viewer_id: int | None = None) -> FeedItem:
-    with get_session() as session:
-        liked = is_post_liked(session, viewer_id, post.id)
+def feed_item(
+    post: DbPost,
+    profile: DbProfile,
+    viewer_id: int | None = None,
+    liked_post_ids: set[int] | None = None,
+) -> FeedItem:
+    if liked_post_ids is None:
+        with get_session() as session:
+            liked = is_post_liked(session, viewer_id, post.id)
+    else:
+        liked = post.id in liked_post_ids
     return FeedItem(
         id=str(post.id), thumbnail=post.thumbnail, media_url=post.media_url,
         caption=post.caption or "", views=post.views, likes=post.likes,
@@ -309,13 +347,24 @@ class Query:
             profile = find_profile(session, username)
             if profile is None:
                 return None
+            profile = session.execute(
+                select(DbProfile)
+                .options(selectinload(DbProfile.posts), selectinload(DbProfile.playlists))
+                .where(DbProfile.id == profile.id)
+            ).scalar_one()
             user_id = info.context.get("user_id")
             if not can_view_profile(session, user_id, profile):
                 return None
             is_following = False
             if user_id is not None and user_id != profile.user_id:
                 is_following = is_following_profile(session, user_id, profile.user_id)
-            return profile_to_graphql(profile, is_following=is_following, viewer_id=user_id)
+            liked_ids = liked_post_ids(session, user_id, list(profile.posts))
+            return profile_to_graphql(
+                profile,
+                is_following=is_following,
+                viewer_id=user_id,
+                liked_post_ids=liked_ids,
+            )
 
     @strawberry.field(name="searchProfiles")
     def search_profiles(self, query: str, info: Info, limit: int = 20) -> list[ProfileSummary]:
@@ -380,7 +429,11 @@ class Query:
                 .limit(page_size)
             ).all()
             viewer_id = info.context.get("user_id")
-            return [feed_item(post, profile, viewer_id=viewer_id) for post, profile in rows]
+            liked_ids = liked_post_ids(session, viewer_id, [post for post, _ in rows])
+            return [
+                feed_item(post, profile, viewer_id=viewer_id, liked_post_ids=liked_ids)
+                for post, profile in rows
+            ]
 
     @strawberry.field(name="searchHashtags")
     def search_hashtags(self, query: str, limit: int = 20) -> list[HashtagResult]:
@@ -441,8 +494,12 @@ class Query:
             ordered = sorted(rows, key=lambda post: post.id, reverse=True)
             page = ordered[offset:offset + page_size]
             has_more = offset + page_size < len(ordered)
+            liked_ids = liked_post_ids(session, user_id, page)
             return PostPage(
-                items=[post_to_graphql(post, viewer_id=user_id) for post in page],
+                items=[
+                    post_to_graphql(post, viewer_id=user_id, liked_post_ids=liked_ids)
+                    for post in page
+                ],
                 next_cursor=str(offset + page_size) if has_more else None,
             )
 
@@ -472,8 +529,12 @@ class Query:
             ).scalars().all()
             has_more = len(ordered) > page_size
             page = ordered[:page_size]
+            liked_ids = liked_post_ids(session, viewer_id, page)
             return PostPage(
-                items=[post_to_graphql(post, viewer_id=viewer_id) for post in page],
+                items=[
+                    post_to_graphql(post, viewer_id=viewer_id, liked_post_ids=liked_ids)
+                    for post in page
+                ],
                 next_cursor=str(offset + page_size) if has_more else None,
             )
 
@@ -644,8 +705,12 @@ class Query:
             ).all()
             has_more = len(rows) > page_size
             rows = rows[:page_size]
+            liked_ids = liked_post_ids(session, viewer_id, [post for post, _ in rows])
             return FeedPage(
-                items=[feed_item(post, profile, viewer_id=viewer_id) for post, profile in rows],
+                items=[
+                    feed_item(post, profile, viewer_id=viewer_id, liked_post_ids=liked_ids)
+                    for post, profile in rows
+                ],
                 next_cursor=str(offset + page_size) if has_more else None,
             )
 
@@ -757,11 +822,15 @@ class Mutation:
                 except IntegrityError:
                     session.rollback()
                 else:
+                    session.execute(
+                        update(DbPost)
+                        .where(DbPost.id == post_id)
+                        .values(likes=DbPost.likes + 1)
+                    )
                     session.commit()
 
-            current_count = refresh_post_like_count(session, post_id)
-            session.commit()
             session.refresh(post)
+            current_count = post.likes
             return LikeResult(liked=True, likes=current_count)
 
     @strawberry.mutation(name="unlikePost")
