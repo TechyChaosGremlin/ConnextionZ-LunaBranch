@@ -527,6 +527,14 @@ export async function deleteAccount(email: string): Promise<Result<null>> {
       endSession();
       return { ok: true, value: null };
     }
+    let message = "The account could not be deleted. Try again.";
+    try {
+      const body = await response.json() as { detail?: string };
+      if (body.detail) message = body.detail;
+    } catch {
+      // Keep the generic message when the backend response is not JSON.
+    }
+    return { ok: false, error: message };
   } catch {
     // Backend not reachable: continue with local prototype deletion behavior.
   }

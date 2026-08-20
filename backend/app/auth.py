@@ -7,7 +7,8 @@ from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import Session
 
 from backend.app.database import get_session
-from backend.app.models import User, Profile
+from backend.app.media import media_storage
+from backend.app.models import Media, User, Profile
 from backend.app.profile_validation import validate_display_name, validate_username
 
 
@@ -123,13 +124,16 @@ def get_user_profile(user_id: int) -> Profile | None:
 
 
 def delete_user_account(user_id: int) -> bool:
-    """Delete a user account and all related ORM-owned records."""
+    """Delete a user account, its database records, and owned media files."""
     with get_session() as session:
         user = session.execute(
             select(User).where(User.id == user_id)
         ).scalar_one_or_none()
         if user is None:
             return False
+        media_urls = list(session.scalars(select(Media.url).where(Media.user_id == user_id)))
         session.delete(user)
         session.commit()
+        for media_url in media_urls:
+            media_storage.delete(media_url)
         return True

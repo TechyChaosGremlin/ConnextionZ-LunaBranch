@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import BinaryIO
+from urllib.parse import urlparse
 
 import boto3
 
@@ -43,3 +44,24 @@ class MediaStorage:
             while chunk := source.read(1024 * 1024):
                 output.write(chunk)
         return f"/media/{filename}"
+
+    def delete(self, url: str) -> None:
+        """Delete a previously stored object without allowing path traversal."""
+        if self.uses_s3:
+            parsed = urlparse(url)
+            if self.public_base_url and url.startswith(self.public_base_url.rstrip("/") + "/"):
+                key = url[len(self.public_base_url.rstrip("/")) + 1:]
+            elif parsed.netloc.startswith(f"{self.bucket}."):
+                key = parsed.path.lstrip("/")
+            else:
+                return
+            self.client.delete_object(Bucket=self.bucket, Key=key)
+            return
+
+        filename = urlparse(url).path.removeprefix("/media/")
+        if not filename or "/" in filename or "\\" in filename:
+            return
+        destination = (self.local_root / filename).resolve()
+        if destination.parent != self.local_root.resolve():
+            return
+        destination.unlink(missing_ok=True)

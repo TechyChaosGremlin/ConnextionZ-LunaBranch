@@ -247,13 +247,19 @@ export function DeleteProfileModal({
   const [confirm, setConfirm] = useState(false);
   const [typed, setTyped] = useState("");
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleDelete = async () => {
     setLoading(true);
+    setError(null);
+    const result = await deleteAccount(account.email);
+    setLoading(false);
+    if (!result.ok) {
+      setError(result.error);
+      return;
+    }
     // Preferences are keyed separately from the account, so both are cleared.
     clearPreferences(account.email);
-    await deleteAccount(account.email);
-    setLoading(false);
     onDeleted();
   };
 
@@ -277,13 +283,14 @@ export function DeleteProfileModal({
 
           <div className="rounded-2xl p-4 space-y-3" style={{ background: "rgba(239,68,68,0.08)", border: "1px solid rgba(239,68,68,0.2)" }}>
             <p className="text-red-400 text-[12px] font-bold uppercase tracking-widest">What will be deleted</p>
-            {["Your profile and creator identity", "All collaboration history", "Messages and conversations", "Saved sounds and content", "Collab Score and reviews", "Every preference you have set"].map((item) => (
+              {["Your profile and creator identity", "Your posts and playlists", "Uploaded avatars and media", "Follows and likes", "Every preference you have set"].map((item) => (
               <div key={item} className="flex items-center gap-3">
                 <X className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
                 <span className="text-white/65 text-[13px]">{item}</span>
               </div>
             ))}
           </div>
+          {error && <p className="text-red-300 text-[13px] text-center">{error}</p>}
 
           <div className="flex gap-3 pt-2">
             <motion.button whileTap={{ scale: 0.97 }} onClick={onCancel}

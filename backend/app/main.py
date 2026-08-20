@@ -86,6 +86,19 @@ def is_post_liked(session, user_id: int | None, post_id: int) -> bool:
     ).first() is not None
 
 
+def refresh_post_like_count(session, post_id: int) -> int:
+    post = session.execute(select(DbPost).where(DbPost.id == post_id)).scalar_one_or_none()
+    if post is None:
+        return 0
+
+    count = session.execute(
+        select(func.count(PostLike.id)).where(PostLike.post_id == post_id)
+    ).scalar_one() or 0
+    post.likes = int(count)
+    session.flush()
+    return post.likes
+
+
 def post_to_graphql(post: DbPost, viewer_id: int | None = None) -> ContentItem:
     with get_session() as session:
         liked = is_post_liked(session, viewer_id, post.id)
@@ -719,12 +732,17 @@ class Mutation:
             ).scalar_one_or_none()
             if existing is None:
                 session.add(PostLike(post_id=post_id, user_id=user_id))
-                post.likes = max(0, post.likes + 1)
-                session.commit()
-                session.refresh(post)
-                return LikeResult(liked=True, likes=post.likes)
+                try:
+                    session.flush()
+                except IntegrityError:
+                    session.rollback()
+                else:
+                    session.commit()
 
-            return LikeResult(liked=True, likes=post.likes)
+            current_count = refresh_post_like_count(session, post_id)
+            session.commit()
+            session.refresh(post)
+            return LikeResult(liked=True, likes=current_count)
 
     @strawberry.mutation(name="unlikePost")
     def unlike_post(self, id: strawberry.ID, info: Info) -> LikeResult:
@@ -743,12 +761,12 @@ class Mutation:
             ).scalar_one_or_none()
             if existing is not None:
                 session.delete(existing)
-                post.likes = max(0, post.likes - 1)
                 session.commit()
-                session.refresh(post)
-                return LikeResult(liked=False, likes=post.likes)
 
-            return LikeResult(liked=False, likes=post.likes)
+            current_count = refresh_post_like_count(session, post_id)
+            session.commit()
+            session.refresh(post)
+            return LikeResult(liked=False, likes=current_count)
 
     @strawberry.mutation
     def follow(self, username: str, info: Info) -> FollowResult:
