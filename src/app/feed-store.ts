@@ -21,6 +21,7 @@ import { type Result } from "./auth-store";
 import { registerCreator, type FeedVideo } from "./creators";
 import { noteLikeState } from "./like-store";
 import { noteSaveState } from "./save-store";
+import { noteShareState } from "./share-store";
 import { fetchFeedPageFromApi } from "./profile-graphql";
 
 export interface FeedPage {
@@ -43,6 +44,7 @@ export async function fetchFeedPage(cursor: string | null): Promise<Result<FeedP
         const creator = registerCreator(post.creator);
         noteLikeState(post.id, post.isLiked ?? false, post.likes);
         noteSaveState(post.id, post.isSaved ?? false, post.saves ?? 0);
+        noteShareState(post.id, post.shares ?? 0, post.isShared ?? false);
         return {
           id: post.id,
           creatorId: creator.id,
@@ -58,6 +60,7 @@ export async function fetchFeedPage(cursor: string | null): Promise<Result<FeedP
           mediaUrl: post.mediaUrl ?? undefined,
           isLiked: post.isLiked ?? false,
           isSaved: post.isSaved ?? false,
+          isShared: post.isShared ?? false,
           ...(post.collabWith ? { collabWith: post.collabWith } : {}),
         };
       }),

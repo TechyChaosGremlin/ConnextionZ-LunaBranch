@@ -11,6 +11,7 @@ import { useFeed } from "./feed-store";
 import { activateFollowGraph, useFollowingIds } from "./follow-store";
 import { activateLikeGraph, useLike } from "./like-store";
 import { activateSaveGraph, useSave } from "./save-store";
+import { activateShareGraph, useShare } from "./share-store";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Heart, MessageCircle, Bookmark, Music,
@@ -374,9 +375,10 @@ const PLATFORMS = [
   { id: "facebook",  label: "Facebook",  color: "#fff",    bg: "#1877F2", icon: "f" },
   { id: "telegram",  label: "Telegram",  color: "#fff",    bg: "#229ED9", icon: "✈" },
   { id: "reddit",    label: "Reddit",    color: "#fff",    bg: "#FF4500", icon: "r/" },
+  { id: "messages",  label: "Messages",  color: "#fff",    bg: "#34C759", icon: "✉" },
 ];
 
-function ShareSheet({ video, onClose }: { video: DisplayVideo; onClose: () => void }) {
+function ShareSheet({ video, onClose, onShared }: { video: DisplayVideo; onClose: () => void; onShared: () => void }) {
   const isDark = useTheme();
   const [copied, setCopied] = useState(false);
   const [sharedTo, setSharedTo] = useState<string | null>(null);
@@ -396,6 +398,38 @@ function ShareSheet({ video, onClose }: { video: DisplayVideo; onClose: () => vo
     copyBarBg: isDark ? "rgba(255,255,255,0.05)" : "rgba(0,0,0,0.04)",
     copyBorder: isDark ? "1px solid rgba(255,255,255,0.08)" : "1px solid rgba(0,0,0,0.08)",
     urlColor: isDark ? "rgba(255,255,255,0.4)" : "rgba(10,14,26,0.4)",
+  };
+
+  const shareUrl = encodeURIComponent(fakeUrl);
+  const shareText = encodeURIComponent(`${video.caption} @${video.username}`);
+
+  const openShareTarget = async (platform: string): Promise<boolean> => {
+    const targetUrls: Record<string, string> = {
+      twitter: `https://twitter.com/intent/tweet?url=${shareUrl}&text=${shareText}`,
+      whatsapp: `https://wa.me/?text=${shareText}%20${shareUrl}`,
+      facebook: `https://www.facebook.com/sharer/sharer.php?u=${shareUrl}`,
+      telegram: `https://t.me/share/url?url=${shareUrl}&text=${shareText}`,
+      reddit: `https://www.reddit.com/submit?url=${shareUrl}&title=${shareText}`,
+    };
+
+    if (targetUrls[platform]) {
+      window.open(targetUrls[platform], "_blank", "noopener,noreferrer,width=700,height=700");
+      return true;
+    }
+
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: `@${video.username} on ConnextionZ`, text: video.caption, url: fakeUrl });
+        return true;
+      } catch {
+        return false;
+      }
+    }
+
+    await navigator.clipboard.writeText(fakeUrl).catch(() => {});
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+    return true;
   };
 
   return (
@@ -420,7 +454,14 @@ function ShareSheet({ video, onClose }: { video: DisplayVideo; onClose: () => vo
       <div className="grid grid-cols-4 gap-x-3 gap-y-5 px-5 py-5">
         {PLATFORMS.map((p) => (
           <motion.button key={p.id} whileTap={{ scale: 0.88 }}
-            onClick={() => { setSharedTo(p.id); setTimeout(() => setSharedTo(null), 1500); }}
+            onClick={() => {
+              void openShareTarget(p.id).then((didShare) => {
+                if (!didShare) return;
+                onShared();
+                setSharedTo(p.id);
+                setTimeout(() => setSharedTo(null), 1500);
+              });
+            }}
             className="flex flex-col items-center gap-2"
           >
             <div className="w-14 h-14 rounded-2xl flex items-center justify-center text-lg font-bold relative overflow-hidden"
@@ -452,9 +493,9 @@ function ShareSheet({ video, onClose }: { video: DisplayVideo; onClose: () => vo
 // ─── ACTION RAIL ──────────────────────────────────────────────────────────────
 
 function ActionRail({
-  video, liked, likeCount, saved, saveCount, onLike, onSave, onCollab, onComment, onShare,
+  video, liked, likeCount, saved, saveCount, shareCount, onLike, onSave, onCollab, onComment, onShare,
 }: {
-  video: DisplayVideo; liked: boolean; likeCount: number; saved: boolean; saveCount: number;
+  video: DisplayVideo; liked: boolean; likeCount: number; saved: boolean; saveCount: number; shareCount: number;
   onLike: () => void; onSave: () => void; onCollab: () => void; onComment: () => void; onShare: () => void;
 }) {
   return (
@@ -485,7 +526,7 @@ function ActionRail({
       </motion.button>
       <motion.button whileTap={{ scale: 0.85 }} onClick={onShare} className="flex flex-col items-center gap-1">
         <Navigation className="w-7 h-7 text-white drop-shadow-lg" />
-        <span className="text-white text-[11px] font-semibold">{fmt(video.shares)}</span>
+        <span className="text-white text-[11px] font-semibold">{fmt(shareCount)}</span>
       </motion.button>
     </div>
   );
@@ -726,6 +767,7 @@ export default function App() {
     activateFollowGraph(account.email);
     activateLikeGraph(account.email);
     activateSaveGraph(account.email);
+    activateShareGraph(account.email);
   }, [account.email]);
 
   // The two top-bar tabs are the same feed filtered, so switching them restarts
@@ -736,6 +778,7 @@ export default function App() {
 
   const likeState = useLike(video?.id ?? "", video?.isLiked ?? false, video?.likes ?? 0);
   const saveState = useSave(video?.id ?? "", video?.isSaved ?? false, video?.saves ?? 0);
+  const shareState = useShare(video?.id ?? "", video?.shares ?? 0);
 
   // A page after the next is requested a slide before it is needed, so
   // scrolling never waits on a page that is still in flight.
@@ -878,7 +921,7 @@ export default function App() {
                 onSave={() => { void saveState.toggle(); }}
                 onCollab={() => setCollabTarget(video)}
                 onComment={() => setCommentTarget(video)}
-                onShare={() => setShareTarget(video)} />
+                onShare={() => setShareTarget(video)} shareCount={shareState.shares} />
 
               <VideoInfo video={video} />
 
@@ -992,7 +1035,7 @@ export default function App() {
                 <motion.div key="share-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
                   className="absolute inset-0 z-40" style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}
                   onClick={() => setShareTarget(null)} />
-                <ShareSheet key="share-sheet" video={shareTarget} onClose={() => setShareTarget(null)} />
+                <ShareSheet key="share-sheet" video={shareTarget} onShared={() => { void shareState.share(); }} onClose={() => setShareTarget(null)} />
               </>
             )}
           </AnimatePresence>

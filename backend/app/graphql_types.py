@@ -23,6 +23,7 @@ class ContentItem:
     shares: int = 0
     saves: int = 0
     is_saved: bool = strawberry.field(name="isSaved", default=False)
+    is_shared: bool = strawberry.field(name="isShared", default=False)
 
 
 @strawberry.type
@@ -35,6 +36,12 @@ class LikeResult:
 class SaveResult:
     saved: bool
     saves: int
+
+
+@strawberry.type
+class ShareResult:
+    shares: int
+    shared: bool
 
 
 @strawberry.type

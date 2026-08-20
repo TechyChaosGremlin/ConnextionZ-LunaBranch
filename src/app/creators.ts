@@ -60,6 +60,8 @@ export interface FeedVideo extends ContentItem {
   isLiked?: boolean;
   /** Whether the signed-in viewer has already saved this post. */
   isSaved?: boolean;
+  /** Whether the signed-in viewer has already shared this post. */
+  isShared?: boolean;
 }
 
 export interface Creator {

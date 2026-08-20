@@ -132,6 +132,19 @@ class PostSave(Base):
     )
 
 
+class PostShare(Base):
+    __tablename__ = "post_shares"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("post_id", "user_id", name="uq_post_shares_pair"),
+    )
+
+
 class Playlist(Base):
     __tablename__ = "playlists"
 

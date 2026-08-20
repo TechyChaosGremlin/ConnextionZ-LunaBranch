@@ -16,6 +16,7 @@ export type GraphQLPost = {
   shares?: number | null;
   saves?: number | null;
   isSaved?: boolean | null;
+  isShared?: boolean | null;
   collabWith?: string | null;
 };
 
@@ -160,6 +161,7 @@ export async function fetchFeedPageFromApi(cursor: string | null, limit = 10): P
           shares
           saves
           isSaved
+          isShared
           collabWith
           creator { id username displayName avatarUrl avatarColor verified collabScore collabCount followers following openToCollab }
         }
@@ -174,7 +176,7 @@ export async function searchPosts(query: string, limit = 20): Promise<GraphQLFee
     query SearchPosts($query: String!, $limit: Int!) {
       searchPosts(query: $query, limit: $limit) {
         id thumbnail mediaUrl caption views likes isLiked hashtags audio visibility
-        allowComments allowCollabs durationSec comments shares saves isSaved collabWith
+        allowComments allowCollabs durationSec comments shares saves isSaved isShared collabWith
         creator { id username displayName avatarUrl avatarColor verified }
       }
     }
@@ -428,6 +430,7 @@ const postFields = `
   shares
   saves
   isSaved
+  isShared
   collabWith
 `;
 
@@ -499,6 +502,20 @@ export type GraphQLSaveResult = {
   saved: boolean;
   saves: number;
 };
+
+export type GraphQLShareResult = {
+  shares: number;
+  shared: boolean;
+};
+
+export async function sharePost(id: string): Promise<Result<GraphQLShareResult>> {
+  const result = await graphqlRequestResult<{ sharePost: GraphQLShareResult }>(`
+    mutation SharePost($id: ID!) {
+      sharePost(id: $id) { shares shared }
+    }
+  `, { id });
+  return result.ok ? { ok: true, value: result.value.sharePost } : result;
+}
 
 export async function savePost(id: string): Promise<Result<GraphQLSaveResult>> {
   const result = await graphqlRequestResult<{ savePost: GraphQLSaveResult }>(`
