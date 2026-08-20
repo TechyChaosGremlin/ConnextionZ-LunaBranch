@@ -15,6 +15,7 @@ export type GraphQLPost = {
   comments?: number | null;
   shares?: number | null;
   saves?: number | null;
+  isSaved?: boolean | null;
   collabWith?: string | null;
 };
 
@@ -158,6 +159,7 @@ export async function fetchFeedPageFromApi(cursor: string | null, limit = 10): P
           comments
           shares
           saves
+          isSaved
           collabWith
           creator { id username displayName avatarUrl avatarColor verified collabScore collabCount followers following openToCollab }
         }
@@ -172,7 +174,7 @@ export async function searchPosts(query: string, limit = 20): Promise<GraphQLFee
     query SearchPosts($query: String!, $limit: Int!) {
       searchPosts(query: $query, limit: $limit) {
         id thumbnail mediaUrl caption views likes isLiked hashtags audio visibility
-        allowComments allowCollabs durationSec comments shares saves collabWith
+        allowComments allowCollabs durationSec comments shares saves isSaved collabWith
         creator { id username displayName avatarUrl avatarColor verified }
       }
     }
@@ -425,6 +427,7 @@ const postFields = `
   comments
   shares
   saves
+  isSaved
   collabWith
 `;
 
@@ -490,6 +493,29 @@ export async function unlikePost(id: string): Promise<Result<GraphQLLikeResult>>
     }
   `, { id });
   return result.ok ? { ok: true, value: result.value.unlikePost } : result;
+}
+
+export type GraphQLSaveResult = {
+  saved: boolean;
+  saves: number;
+};
+
+export async function savePost(id: string): Promise<Result<GraphQLSaveResult>> {
+  const result = await graphqlRequestResult<{ savePost: GraphQLSaveResult }>(`
+    mutation SavePost($id: ID!) {
+      savePost(id: $id) { saved saves }
+    }
+  `, { id });
+  return result.ok ? { ok: true, value: result.value.savePost } : result;
+}
+
+export async function unsavePost(id: string): Promise<Result<GraphQLSaveResult>> {
+  const result = await graphqlRequestResult<{ unsavePost: GraphQLSaveResult }>(`
+    mutation UnsavePost($id: ID!) {
+      unsavePost(id: $id) { saved saves }
+    }
+  `, { id });
+  return result.ok ? { ok: true, value: result.value.unsavePost } : result;
 }
 
 export async function createPost(input: PostInput): Promise<GraphQLPost | null> {

@@ -22,12 +22,19 @@ class ContentItem:
     comments: int = 0
     shares: int = 0
     saves: int = 0
+    is_saved: bool = strawberry.field(name="isSaved", default=False)
 
 
 @strawberry.type
 class LikeResult:
     liked: bool
     likes: int
+
+
+@strawberry.type
+class SaveResult:
+    saved: bool
+    saves: int
 
 
 @strawberry.type
@@ -82,6 +89,7 @@ class FeedItem:
     comments: int = 0
     shares: int = 0
     saves: int = 0
+    is_saved: bool = strawberry.field(name="isSaved", default=False)
     creator: ProfileSummary
 
 

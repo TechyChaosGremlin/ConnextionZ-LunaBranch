@@ -20,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { type Result } from "./auth-store";
 import { registerCreator, type FeedVideo } from "./creators";
 import { noteLikeState } from "./like-store";
+import { noteSaveState } from "./save-store";
 import { fetchFeedPageFromApi } from "./profile-graphql";
 
 export interface FeedPage {
@@ -41,6 +42,7 @@ export async function fetchFeedPage(cursor: string | null): Promise<Result<FeedP
       items: page.items.map((post): FeedVideo => {
         const creator = registerCreator(post.creator);
         noteLikeState(post.id, post.isLiked ?? false, post.likes);
+        noteSaveState(post.id, post.isSaved ?? false, post.saves ?? 0);
         return {
           id: post.id,
           creatorId: creator.id,
@@ -55,6 +57,7 @@ export async function fetchFeedPage(cursor: string | null): Promise<Result<FeedP
           audio: post.audio ?? "Original Sound",
           mediaUrl: post.mediaUrl ?? undefined,
           isLiked: post.isLiked ?? false,
+          isSaved: post.isSaved ?? false,
           ...(post.collabWith ? { collabWith: post.collabWith } : {}),
         };
       }),

@@ -58,6 +58,8 @@ export interface FeedVideo extends ContentItem {
   mediaUrl?: string;
   /** Whether the signed-in viewer has already liked this post. */
   isLiked?: boolean;
+  /** Whether the signed-in viewer has already saved this post. */
+  isSaved?: boolean;
 }
 
 export interface Creator {

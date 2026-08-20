@@ -10,6 +10,7 @@ import { creatorById, type FeedVideo } from "./creators";
 import { useFeed } from "./feed-store";
 import { activateFollowGraph, useFollowingIds } from "./follow-store";
 import { activateLikeGraph, useLike } from "./like-store";
+import { activateSaveGraph, useSave } from "./save-store";
 import { motion, AnimatePresence } from "motion/react";
 import {
   Heart, MessageCircle, Bookmark, Music,
@@ -43,6 +44,7 @@ interface DisplayVideo {
   /** An uploaded video file, when the post has one — image-only posts have none. */
   mediaUrl?: string;
   isLiked: boolean;
+  isSaved: boolean;
 }
 
 function toDisplayVideo(item: FeedVideo): DisplayVideo {
@@ -65,6 +67,7 @@ function toDisplayVideo(item: FeedVideo): DisplayVideo {
     thumbnail: item.thumbnail,
     mediaUrl: item.mediaUrl,
     isLiked: item.isLiked ?? false,
+    isSaved: item.isSaved ?? false,
   };
 }
 
@@ -449,9 +452,9 @@ function ShareSheet({ video, onClose }: { video: DisplayVideo; onClose: () => vo
 // ─── ACTION RAIL ──────────────────────────────────────────────────────────────
 
 function ActionRail({
-  video, liked, likeCount, saved, onLike, onSave, onCollab, onComment, onShare,
+  video, liked, likeCount, saved, saveCount, onLike, onSave, onCollab, onComment, onShare,
 }: {
-  video: DisplayVideo; liked: boolean; likeCount: number; saved: boolean;
+  video: DisplayVideo; liked: boolean; likeCount: number; saved: boolean; saveCount: number;
   onLike: () => void; onSave: () => void; onCollab: () => void; onComment: () => void; onShare: () => void;
 }) {
   return (
@@ -475,8 +478,10 @@ function ActionRail({
       </div>
       <CollabButton onTap={onCollab} />
       <motion.button whileTap={{ scale: 0.85 }} onClick={onSave} className="flex flex-col items-center gap-1">
-        <Bookmark className={`w-7 h-7 drop-shadow-lg ${saved ? "fill-yellow-400 text-yellow-400" : "text-white"}`} />
-        <span className="text-white text-[11px] font-semibold">{fmt(video.saves + (saved ? 1 : 0))}</span>
+        <motion.div animate={saved ? { scale: [1, 1.35, 1] } : {}} transition={{ duration: 0.25 }}>
+          <Bookmark className={`w-7 h-7 drop-shadow-lg ${saved ? "fill-yellow-400 text-yellow-400" : "text-white"}`} />
+        </motion.div>
+        <span className="text-white text-[11px] font-semibold">{fmt(saveCount)}</span>
       </motion.button>
       <motion.button whileTap={{ scale: 0.85 }} onClick={onShare} className="flex flex-col items-center gap-1">
         <Navigation className="w-7 h-7 text-white drop-shadow-lg" />
@@ -707,7 +712,6 @@ export default function App() {
   const [liveTitle, setLiveTitle] = useState("");
   const [idx, setIdx] = useState(0);
   const [dir, setDir] = useState(1);
-  const [saved, setSaved] = useState<Record<string, boolean>>({});
   const [collabTarget, setCollabTarget] = useState<DisplayVideo | null>(null);
   const [commentTarget, setCommentTarget] = useState<DisplayVideo | null>(null);
   const [shareTarget, setShareTarget] = useState<DisplayVideo | null>(null);
@@ -721,6 +725,7 @@ export default function App() {
   useEffect(() => {
     activateFollowGraph(account.email);
     activateLikeGraph(account.email);
+    activateSaveGraph(account.email);
   }, [account.email]);
 
   // The two top-bar tabs are the same feed filtered, so switching them restarts
@@ -730,6 +735,7 @@ export default function App() {
   const video = feed[Math.min(idx, feed.length - 1)];
 
   const likeState = useLike(video?.id ?? "", video?.isLiked ?? false, video?.likes ?? 0);
+  const saveState = useSave(video?.id ?? "", video?.isSaved ?? false, video?.saves ?? 0);
 
   // A page after the next is requested a slide before it is needed, so
   // scrolling never waits on a page that is still in flight.
@@ -866,9 +872,10 @@ export default function App() {
                 </div>
               )}
 
-              <ActionRail video={video} liked={likeState.liked} likeCount={likeState.likes} saved={!!saved[video.id]}
+              <ActionRail video={video} liked={likeState.liked} likeCount={likeState.likes}
+                saved={saveState.saved} saveCount={saveState.saves}
                 onLike={() => { void likeState.toggle(); }}
-                onSave={() => setSaved((s) => ({ ...s, [video.id]: !s[video.id] }))}
+                onSave={() => { void saveState.toggle(); }}
                 onCollab={() => setCollabTarget(video)}
                 onComment={() => setCommentTarget(video)}
                 onShare={() => setShareTarget(video)} />

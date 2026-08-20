@@ -28,7 +28,7 @@ from slowapi.util import get_remote_address
 from backend.app.auth import delete_user_account, get_user_profile, AuthContext
 from backend.app.auth_routes import create_auth_router
 from backend.app.database import get_session, run_migrations
-from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, PostLike, Profile as DbProfile, Sound as DbSound, User
+from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, PostLike, PostSave, Profile as DbProfile, Sound as DbSound, User
 from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
 from backend.app.media_routes import create_media_router
 from backend.app.profile_validation import (
@@ -40,8 +40,8 @@ from backend.app.profile_validation import (
 )
 from backend.app.graphql_types import (
     ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, LikeResult, Playlist,
-    PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SoundResult,
-    UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
+    PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SaveResult,
+    SoundResult, UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
 )
 from backend.app.seed import seed_database
 logging.basicConfig(
@@ -87,6 +87,27 @@ def is_post_liked(session, user_id: int | None, post_id: int) -> bool:
     ).first() is not None
 
 
+def is_post_saved(session, user_id: int | None, post_id: int) -> bool:
+    if user_id is None:
+        return False
+    return session.execute(
+        select(PostSave.id).where(PostSave.post_id == post_id, PostSave.user_id == user_id)
+    ).first() is not None
+
+
+def refresh_post_save_count(session, post_id: int) -> int:
+    post = session.execute(select(DbPost).where(DbPost.id == post_id)).scalar_one_or_none()
+    if post is None:
+        return 0
+
+    count = session.execute(
+        select(func.count(PostSave.id)).where(PostSave.post_id == post_id)
+    ).scalar_one() or 0
+    post.saves = int(count)
+    session.flush()
+    return post.saves
+
+
 def refresh_post_like_count(session, post_id: int) -> int:
     post = session.execute(select(DbPost).where(DbPost.id == post_id)).scalar_one_or_none()
     if post is None:
@@ -104,12 +125,18 @@ def post_to_graphql(
     post: DbPost,
     viewer_id: int | None = None,
     liked_post_ids: set[int] | None = None,
+    saved_post_ids: set[int] | None = None,
 ) -> ContentItem:
     if liked_post_ids is None:
         with get_session() as session:
             liked = is_post_liked(session, viewer_id, post.id)
     else:
         liked = post.id in liked_post_ids
+    if saved_post_ids is None:
+        with get_session() as session:
+            saved = is_post_saved(session, viewer_id, post.id)
+    else:
+        saved = post.id in saved_post_ids
     return ContentItem(
         id=str(post.id), thumbnail=post.thumbnail, media_url=post.media_url,
         caption=post.caption or "", views=post.views, likes=post.likes,
@@ -118,7 +145,7 @@ def post_to_graphql(
         allow_comments=post.allow_comments if post.allow_comments is not None else True,
         allow_collabs=post.allow_collabs if post.allow_collabs is not None else True,
         duration_sec=post.duration_sec or 0.0, comments=post.comments or 0,
-        shares=post.shares or 0, saves=post.saves or 0,
+        shares=post.shares or 0, saves=post.saves or 0, is_saved=saved,
     )
 
 
@@ -133,14 +160,31 @@ def liked_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[i
     ).all())
 
 
+def saved_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[int]:
+    if viewer_id is None or not posts:
+        return set()
+    return set(session.scalars(
+        select(PostSave.post_id).where(
+            PostSave.user_id == viewer_id,
+            PostSave.post_id.in_([post.id for post in posts]),
+        )
+    ).all())
+
+
 def profile_to_graphql(
     profile: DbProfile,
     is_following: bool = False,
     viewer_id: int | None = None,
     liked_post_ids: set[int] | None = None,
+    saved_post_ids: set[int] | None = None,
 ) -> Profile:
     all_posts = [
-        post_to_graphql(post, viewer_id=viewer_id, liked_post_ids=liked_post_ids)
+        post_to_graphql(
+            post,
+            viewer_id=viewer_id,
+            liked_post_ids=liked_post_ids,
+            saved_post_ids=saved_post_ids,
+        )
         for post in profile.posts
     ]
     page_size = 12
@@ -285,12 +329,18 @@ def feed_item(
     profile: DbProfile,
     viewer_id: int | None = None,
     liked_post_ids: set[int] | None = None,
+    saved_post_ids: set[int] | None = None,
 ) -> FeedItem:
     if liked_post_ids is None:
         with get_session() as session:
             liked = is_post_liked(session, viewer_id, post.id)
     else:
         liked = post.id in liked_post_ids
+    if saved_post_ids is None:
+        with get_session() as session:
+            saved = is_post_saved(session, viewer_id, post.id)
+    else:
+        saved = post.id in saved_post_ids
     return FeedItem(
         id=str(post.id), thumbnail=post.thumbnail, media_url=post.media_url,
         caption=post.caption or "", views=post.views, likes=post.likes,
@@ -299,7 +349,7 @@ def feed_item(
         allow_comments=post.allow_comments if post.allow_comments is not None else True,
         allow_collabs=post.allow_collabs if post.allow_collabs is not None else True,
         duration_sec=post.duration_sec or 0.0, comments=post.comments or 0,
-        shares=post.shares or 0, saves=post.saves or 0,
+        shares=post.shares or 0, saves=post.saves or 0, is_saved=saved,
         creator=profile_summary(profile),
     )
 
@@ -359,11 +409,13 @@ class Query:
             if user_id is not None and user_id != profile.user_id:
                 is_following = is_following_profile(session, user_id, profile.user_id)
             liked_ids = liked_post_ids(session, user_id, list(profile.posts))
+            saved_ids = saved_post_ids(session, user_id, list(profile.posts))
             return profile_to_graphql(
                 profile,
                 is_following=is_following,
                 viewer_id=user_id,
                 liked_post_ids=liked_ids,
+                saved_post_ids=saved_ids,
             )
 
     @strawberry.field(name="searchProfiles")
@@ -430,8 +482,15 @@ class Query:
             ).all()
             viewer_id = info.context.get("user_id")
             liked_ids = liked_post_ids(session, viewer_id, [post for post, _ in rows])
+            saved_ids = saved_post_ids(session, viewer_id, [post for post, _ in rows])
             return [
-                feed_item(post, profile, viewer_id=viewer_id, liked_post_ids=liked_ids)
+                feed_item(
+                    post,
+                    profile,
+                    viewer_id=viewer_id,
+                    liked_post_ids=liked_ids,
+                    saved_post_ids=saved_ids,
+                )
                 for post, profile in rows
             ]
 
@@ -495,9 +554,15 @@ class Query:
             page = ordered[offset:offset + page_size]
             has_more = offset + page_size < len(ordered)
             liked_ids = liked_post_ids(session, user_id, page)
+            saved_ids = saved_post_ids(session, user_id, page)
             return PostPage(
                 items=[
-                    post_to_graphql(post, viewer_id=user_id, liked_post_ids=liked_ids)
+                    post_to_graphql(
+                        post,
+                        viewer_id=user_id,
+                        liked_post_ids=liked_ids,
+                        saved_post_ids=saved_ids,
+                    )
                     for post in page
                 ],
                 next_cursor=str(offset + page_size) if has_more else None,
@@ -530,9 +595,15 @@ class Query:
             has_more = len(ordered) > page_size
             page = ordered[:page_size]
             liked_ids = liked_post_ids(session, viewer_id, page)
+            saved_ids = saved_post_ids(session, viewer_id, page)
             return PostPage(
                 items=[
-                    post_to_graphql(post, viewer_id=viewer_id, liked_post_ids=liked_ids)
+                    post_to_graphql(
+                        post,
+                        viewer_id=viewer_id,
+                        liked_post_ids=liked_ids,
+                        saved_post_ids=saved_ids,
+                    )
                     for post in page
                 ],
                 next_cursor=str(offset + page_size) if has_more else None,
@@ -706,9 +777,16 @@ class Query:
             has_more = len(rows) > page_size
             rows = rows[:page_size]
             liked_ids = liked_post_ids(session, viewer_id, [post for post, _ in rows])
+            saved_ids = saved_post_ids(session, viewer_id, [post for post, _ in rows])
             return FeedPage(
                 items=[
-                    feed_item(post, profile, viewer_id=viewer_id, liked_post_ids=liked_ids)
+                    feed_item(
+                        post,
+                        profile,
+                        viewer_id=viewer_id,
+                        liked_post_ids=liked_ids,
+                        saved_post_ids=saved_ids,
+                    )
                     for post, profile in rows
                 ],
                 next_cursor=str(offset + page_size) if has_more else None,
@@ -856,6 +934,62 @@ class Mutation:
             session.commit()
             session.refresh(post)
             return LikeResult(liked=False, likes=current_count)
+
+    @strawberry.mutation(name="savePost")
+    def save_post(self, id: strawberry.ID, info: Info) -> SaveResult:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to save a post", "UNAUTHENTICATED", 401)
+
+        post_id = parse_int_id(id, "Post ID")
+        with get_session() as session:
+            post = session.execute(select(DbPost).where(DbPost.id == post_id)).scalar_one_or_none()
+            if post is None:
+                raise api_error("Post not found", "NOT_FOUND", 404)
+
+            existing = session.execute(
+                select(PostSave).where(PostSave.post_id == post_id, PostSave.user_id == user_id)
+            ).scalar_one_or_none()
+            if existing is None:
+                session.add(PostSave(post_id=post_id, user_id=user_id))
+                try:
+                    session.flush()
+                except IntegrityError:
+                    session.rollback()
+                else:
+                    session.execute(
+                        update(DbPost)
+                        .where(DbPost.id == post_id)
+                        .values(saves=DbPost.saves + 1)
+                    )
+                    session.commit()
+
+            session.refresh(post)
+            return SaveResult(saved=True, saves=post.saves)
+
+    @strawberry.mutation(name="unsavePost")
+    def unsave_post(self, id: strawberry.ID, info: Info) -> SaveResult:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to unsave a post", "UNAUTHENTICATED", 401)
+
+        post_id = parse_int_id(id, "Post ID")
+        with get_session() as session:
+            post = session.execute(select(DbPost).where(DbPost.id == post_id)).scalar_one_or_none()
+            if post is None:
+                raise api_error("Post not found", "NOT_FOUND", 404)
+
+            existing = session.execute(
+                select(PostSave).where(PostSave.post_id == post_id, PostSave.user_id == user_id)
+            ).scalar_one_or_none()
+            if existing is not None:
+                session.delete(existing)
+                session.commit()
+
+            current_count = refresh_post_save_count(session, post_id)
+            session.commit()
+            session.refresh(post)
+            return SaveResult(saved=False, saves=current_count)
 
     @strawberry.mutation
     def follow(self, username: str, info: Info) -> FollowResult:
