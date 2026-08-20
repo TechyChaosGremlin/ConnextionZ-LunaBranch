@@ -32,6 +32,8 @@ export interface ContentItem {
   caption: string;
   views: number;
   likes: number;
+  status?: "draft" | "published" | "scheduled";
+  scheduledAt?: string;
   /** Handle of the co-creator, when the post came out of a collab. */
   collabWith?: string;
 }

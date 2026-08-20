@@ -102,6 +102,8 @@ class Post(Base):
     shares: Mapped[int] = mapped_column(Integer, default=0)
     saves: Mapped[int] = mapped_column(Integer, default=0)
     collab_with: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    status: Mapped[str] = mapped_column(String(20), default="published")
+    scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     profile: Mapped[Profile] = relationship(back_populates="posts")
 

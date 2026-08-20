@@ -18,6 +18,8 @@ export type GraphQLPost = {
   isSaved?: boolean | null;
   isShared?: boolean | null;
   collabWith?: string | null;
+  status?: string | null;
+  scheduledAt?: string | null;
 };
 
 export type UploadedPostMedia = {
@@ -135,13 +137,13 @@ export async function uploadPostMediaFile(file: Blob, filename: string): Promise
   };
 }
 
-export async function fetchFeedPageFromApi(cursor: string | null, limit = 10): Promise<{
+export async function fetchFeedPageFromApi(cursor: string | null, limit = 10, following = false): Promise<{
   items: GraphQLFeedItem[];
   nextCursor: string | null;
 } | null> {
   const data = await graphqlRequest<{ feed: { items: GraphQLFeedItem[]; nextCursor: string | null } }>(`
-    query Feed($cursor: String, $limit: Int!) {
-      feed(cursor: $cursor, limit: $limit) {
+    query Feed($cursor: String, $limit: Int!, $following: Boolean!) {
+      feed(cursor: $cursor, limit: $limit, following: $following) {
         nextCursor
         items {
           id
@@ -167,7 +169,7 @@ export async function fetchFeedPageFromApi(cursor: string | null, limit = 10): P
         }
       }
     }
-  `, { cursor, limit });
+  `, { cursor, limit, following });
   return data?.feed ?? null;
 }
 
@@ -432,6 +434,8 @@ const postFields = `
   isSaved
   isShared
   collabWith
+  status
+  scheduledAt
 `;
 
 const playlistFields = `
@@ -467,6 +471,8 @@ export type PostInput = {
   allowComments?: boolean;
   allowCollabs?: boolean;
   durationSec?: number;
+  status?: string;
+  scheduledAt?: string;
 };
 
 export type PlaylistInput = {

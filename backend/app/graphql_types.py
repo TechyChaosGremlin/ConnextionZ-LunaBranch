@@ -24,6 +24,8 @@ class ContentItem:
     saves: int = 0
     is_saved: bool = strawberry.field(name="isSaved", default=False)
     is_shared: bool = strawberry.field(name="isShared", default=False)
+    status: str = "published"
+    scheduled_at: str | None = strawberry.field(name="scheduledAt", default=None)
 
 
 @strawberry.type
@@ -97,7 +99,10 @@ class FeedItem:
     shares: int = 0
     saves: int = 0
     is_saved: bool = strawberry.field(name="isSaved", default=False)
+    is_shared: bool = strawberry.field(name="isShared", default=False)
     creator: ProfileSummary
+    status: str = "published"
+    scheduled_at: str | None = strawberry.field(name="scheduledAt", default=None)
 
 
 @strawberry.type
@@ -153,6 +158,8 @@ class PostInput:
     allow_comments: bool = strawberry.field(name="allowComments", default=True)
     allow_collabs: bool = strawberry.field(name="allowCollabs", default=True)
     duration_sec: float = strawberry.field(name="durationSec", default=0.0)
+    status: str = "published"
+    scheduled_at: str | None = strawberry.field(name="scheduledAt", default=None)
 
 
 @strawberry.input
@@ -172,6 +179,8 @@ class UpdatePostInput:
     allow_comments: bool | None = strawberry.field(name="allowComments", default=None)
     allow_collabs: bool | None = strawberry.field(name="allowCollabs", default=None)
     duration_sec: float | None = strawberry.field(name="durationSec", default=None)
+    status: str | None = None
+    scheduled_at: str | None = strawberry.field(name="scheduledAt", default=None)
 
 
 @strawberry.input

@@ -64,6 +64,7 @@ export function UploadScreen({
   const [allowComments, setAllowComments] = useState(true);
   const [allowCollabs, setAllowCollabs] = useState(true);
   const [collabWith, setCollabWith] = useState<string>("");
+  const [scheduledAt, setScheduledAt] = useState("");
 
   const [progress, setProgress] = useState(0);
   const [published, setPublished] = useState<OwnPost | null>(null);
@@ -122,6 +123,7 @@ export function UploadScreen({
     allowComments,
     allowCollabs,
     ...(collabWith ? { collabWith } : {}),
+    ...(scheduledAt ? { scheduledAt: new Date(scheduledAt).toISOString() } : {}),
   });
 
   const publish = async () => {
@@ -164,6 +166,7 @@ export function UploadScreen({
     setTagInput("");
     setAudio("Original Sound");
     setCollabWith("");
+    setScheduledAt("");
     setProgress(0);
     setStage("pick");
   };
@@ -186,13 +189,13 @@ export function UploadScreen({
         </button>
         <div className="min-w-0 flex-1">
           <h1 className="font-extrabold text-[22px] leading-tight" style={{ color: t.heading }}>
-            {stage === "published" ? "Posted" : "New post"}
+            {stage === "published" ? (published?.status === "scheduled" ? "Scheduled" : "Posted") : "New post"}
           </h1>
           <p className="text-[13px] mt-0.5" style={{ color: t.sub }}>
             {stage === "pick" && "Pick a video or photo to share"}
             {stage === "compose" && "Add a caption, then publish"}
             {stage === "uploading" && "Uploading — keep this screen open"}
-            {stage === "published" && "Your post is live"}
+            {stage === "published" && (published?.status === "scheduled" ? "Your post is scheduled" : "Your post is live")}
           </p>
         </div>
         {media && stage === "compose" && (
@@ -350,10 +353,29 @@ export function UploadScreen({
                     <ToggleLine label="Open to collab requests on this post" on={allowCollabs}
                       onToggle={() => setAllowCollabs((v) => !v)} t={t} last />
                   </div>
+
+                  <div className="rounded-2xl px-4 py-3.5 mb-6" style={{ background: t.groupBg, border: t.groupBorder }}>
+                    <label className="flex items-center gap-3 text-[14px] font-semibold" style={{ color: t.heading }}>
+                      <Clock className="w-4 h-4" style={{ color: ACCENT }} />
+                      <span className="min-w-0 flex-1">Schedule post</span>
+                      <input
+                        type="datetime-local"
+                        min={new Date(Date.now() + 60_000).toISOString().slice(0, 16)}
+                        value={scheduledAt}
+                        onChange={(event) => setScheduledAt(event.target.value)}
+                        className="min-w-0 max-w-[190px] rounded-lg px-2 py-1 text-[12px]"
+                        style={{ background: t.chipBg, color: t.heading, border: t.chipBorder }}
+                      />
+                    </label>
+                    <p className="text-[12px] mt-1.5" style={{ color: t.sub }}>
+                      Leave empty to publish immediately.
+                    </p>
+                  </div>
                 </div>
 
                 <PrimaryAction onClick={publish}>
-                  <UploadIcon className="w-4 h-4" /> Publish post
+                  {scheduledAt ? <Clock className="w-4 h-4" /> : <UploadIcon className="w-4 h-4" />}
+                  {scheduledAt ? "Schedule post" : "Publish post"}
                 </PrimaryAction>
                 <div className="h-3" />
                 <SecondaryAction t={t} onClick={clearMedia}>Choose a different file</SecondaryAction>
@@ -373,9 +395,13 @@ export function UploadScreen({
                 style={{ background: `linear-gradient(135deg,${ACCENT},#0077cc)`, boxShadow: "0 10px 34px rgba(0,174,239,0.45)" }}>
                 <Check className="w-9 h-9 text-white" strokeWidth={3} />
               </motion.div>
-              <p className="font-extrabold text-[19px]" style={{ color: t.heading }}>Your post is live 🚀</p>
+              <p className="font-extrabold text-[19px]" style={{ color: t.heading }}>
+                {published.status === "scheduled" ? "Your post is scheduled" : "Your post is live"}
+              </p>
               <p className="text-[13px] mt-1.5 leading-relaxed max-w-[280px]" style={{ color: t.sub }}>
-                {published.visibility === "public"
+                {published.status === "scheduled"
+                  ? `It will publish on ${new Date(published.scheduledAt ?? "").toLocaleString()}.`
+                  : published.visibility === "public"
                   ? "It's in the For You feed and on your profile. Views start landing in your dashboard right away."
                   : published.visibility === "followers"
                     ? "Your followers will see it in their Following feed."

@@ -8,7 +8,7 @@ import { InboxScreen } from "./Inbox";
 import { ThemeContext, useTheme } from "./ThemeContext";
 import { creatorById, type FeedVideo } from "./creators";
 import { useFeed } from "./feed-store";
-import { activateFollowGraph, useFollowingIds } from "./follow-store";
+import { activateFollowGraph } from "./follow-store";
 import { activateLikeGraph, useLike } from "./like-store";
 import { activateSaveGraph, useSave } from "./save-store";
 import { activateShareGraph, useShare } from "./share-store";
@@ -760,8 +760,7 @@ export default function App() {
   const [paused, setPaused] = useState(false);
   const touchStartY = useRef(0);
 
-  const { items: feedItems, status: feedStatus, error: feedError, loadMore, reachedEnd, reload } = useFeed();
-  const followingIds = useFollowingIds();
+  const { items: feedItems, status: feedStatus, error: feedError, loadMore, reachedEnd, reload } = useFeed(feedTab === "following");
 
   useEffect(() => {
     activateFollowGraph(account.email);
@@ -773,7 +772,7 @@ export default function App() {
   // The two top-bar tabs are the same feed filtered, so switching them restarts
   // at the first video rather than leaving `idx` past the end of a shorter list.
   const displayItems = useMemo(() => feedItems.map(toDisplayVideo), [feedItems]);
-  const feed = feedTab === "following" ? displayItems.filter((v) => followingIds.includes(v.creatorId)) : displayItems;
+  const feed = displayItems;
   const video = feed[Math.min(idx, feed.length - 1)];
 
   const likeState = useLike(video?.id ?? "", video?.isLiked ?? false, video?.likes ?? 0);

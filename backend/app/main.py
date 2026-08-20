@@ -4,6 +4,7 @@ import os
 import re
 import logging
 import time
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -15,7 +16,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from sqlalchemy import String, and_, cast, func, or_, select, update
+from sqlalchemy import String, and_, cast, desc, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from strawberry.fastapi import GraphQLRouter
@@ -50,6 +51,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("connextionz.api")
 
+POST_STATUSES = {"draft", "published", "scheduled"}
+
 
 def api_error(message: str, code: str, status_code: int) -> GraphQLError:
     return GraphQLError(message, extensions={"code": code, "statusCode": status_code})
@@ -67,6 +70,30 @@ def parse_int_id(raw_id: object, field_name: str = "ID") -> int:
         return int(value)
     except (TypeError, ValueError) as exc:
         raise api_error(f"Invalid {field_name}: expected a numeric ID", "VALIDATION_ERROR", 400) from exc
+
+
+def validate_post_status(status: str) -> str:
+    normalized = status.strip().lower()
+    if normalized not in POST_STATUSES:
+        raise api_error("Post status must be draft, published, or scheduled", "VALIDATION_ERROR", 400)
+    return normalized
+
+
+def parse_scheduled_at(value: str | None, status: str) -> datetime | None:
+    if status != "scheduled":
+        return None
+    if not value:
+        raise api_error("Scheduled posts need a publish date and time", "VALIDATION_ERROR", 400)
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise api_error("Scheduled date and time are invalid", "VALIDATION_ERROR", 400) from exc
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    if parsed <= datetime.utcnow():
+        raise api_error("Scheduled posts must be set for a future date and time", "VALIDATION_ERROR", 400)
+    return parsed
 
 
 def sound_to_graphql(sound: DbSound) -> SoundResult:
@@ -173,6 +200,8 @@ def post_to_graphql(
         allow_collabs=post.allow_collabs if post.allow_collabs is not None else True,
         duration_sec=post.duration_sec or 0.0, comments=post.comments or 0,
         shares=post.shares or 0, saves=post.saves or 0, is_saved=saved, is_shared=shared,
+        status=post.status or "published",
+        scheduled_at=post.scheduled_at.isoformat() + "Z" if post.scheduled_at else None,
     )
 
 
@@ -217,6 +246,10 @@ def profile_to_graphql(
     saved_post_ids: set[int] | None = None,
     shared_post_ids: set[int] | None = None,
 ) -> Profile:
+    visible_posts = [
+        post for post in profile.posts
+        if (post.status or "published") == "published" or viewer_id == profile.user_id
+    ]
     all_posts = [
         post_to_graphql(
             post,
@@ -225,7 +258,7 @@ def profile_to_graphql(
             saved_post_ids=saved_post_ids,
             shared_post_ids=shared_post_ids,
         )
-        for post in profile.posts
+        for post in visible_posts
     ]
     page_size = 12
     recent_posts = all_posts[:page_size]
@@ -396,6 +429,8 @@ def feed_item(
         allow_collabs=post.allow_collabs if post.allow_collabs is not None else True,
         duration_sec=post.duration_sec or 0.0, comments=post.comments or 0,
         shares=post.shares or 0, saves=post.saves or 0, is_saved=saved, is_shared=shared,
+        status=post.status or "published",
+        scheduled_at=post.scheduled_at.isoformat() + "Z" if post.scheduled_at else None,
         creator=profile_summary(profile),
     )
 
@@ -404,6 +439,7 @@ def visible_post_filter(viewer_id: int | None):
     """Build the SQL predicate for posts the viewer is allowed to see."""
     if viewer_id is None:
         return and_(
+            or_(DbPost.status == "published", and_(DbPost.status == "scheduled", DbPost.scheduled_at <= datetime.utcnow())),
             DbPost.visibility == "public",
             DbProfile.private_account.is_(False),
         )
@@ -413,12 +449,15 @@ def visible_post_filter(viewer_id: int | None):
         Follow.following_id == DbProfile.user_id,
     ).exists()
 
-    return or_(
-        and_(DbPost.visibility == "public", DbProfile.private_account.is_(False)),
-        and_(DbPost.visibility == "public", DbProfile.user_id == viewer_id),
-        and_(DbPost.visibility == "public", DbProfile.private_account.is_(True), follows_author),
-        and_(DbPost.visibility == "followers", follows_author),
-        and_(DbPost.visibility == "followers", DbProfile.user_id == viewer_id),
+    return and_(
+        or_(DbPost.status == "published", and_(DbPost.status == "scheduled", DbPost.scheduled_at <= datetime.utcnow())),
+        or_(
+            and_(DbPost.visibility == "public", DbProfile.private_account.is_(False)),
+            and_(DbPost.visibility == "public", DbProfile.user_id == viewer_id),
+            and_(DbPost.visibility == "public", DbProfile.private_account.is_(True), follows_author),
+            and_(DbPost.visibility == "followers", follows_author),
+            and_(DbPost.visibility == "followers", DbProfile.user_id == viewer_id),
+        ),
     )
 
 
@@ -434,7 +473,7 @@ class Query:
         profile = get_user_profile(user_id)
         if profile is None:
             return None
-        return profile_to_graphql(profile)
+        return profile_to_graphql(profile, viewer_id=user_id)
 
     @strawberry.field
     def profile(self, username: str, info: Info) -> Profile | None:
@@ -510,6 +549,7 @@ class Query:
         if not terms:
             return []
         page_size = max(1, min(limit, 50))
+        viewer_id = info.context.get("user_id")
         with get_session() as session:
             filters = []
             for term in terms:
@@ -525,10 +565,10 @@ class Query:
                 select(DbPost, DbProfile)
                 .join(DbProfile, DbPost.profile_id == DbProfile.id)
                 .where(*filters)
+                .where(visible_post_filter(viewer_id))
                 .order_by(DbPost.views.desc(), DbPost.id.desc())
                 .limit(page_size)
             ).all()
-            viewer_id = info.context.get("user_id")
             liked_ids = liked_post_ids(session, viewer_id, [post for post, _ in rows])
             saved_ids = saved_post_ids(session, viewer_id, [post for post, _ in rows])
             shared_ids = shared_post_ids(session, viewer_id, [post for post, _ in rows])
@@ -553,7 +593,9 @@ class Query:
         page_size = max(1, min(limit, 50))
         counts: dict[str, tuple[int, int]] = {}
         with get_session() as session:
-            posts = session.execute(select(DbPost.hashtags, DbPost.views)).all()
+            posts = session.execute(
+                select(DbPost.hashtags, DbPost.views).where(DbPost.status == "published")
+            ).all()
         for hashtags, views in posts:
             for value in hashtags or []:
                 tag = str(value).strip().lstrip("#").lower()
@@ -809,8 +851,12 @@ class Query:
             )
 
     @strawberry.field
-    def feed(self, info: Info, cursor: str | None = None, limit: int = 10) -> FeedPage:
+    def feed(self, info: Info, cursor: str | None = None, limit: int = 10, following: bool = False) -> FeedPage:
         page_size = max(1, min(limit, 50))
+        viewer_id = info.context.get("user_id")
+        if following and viewer_id is None:
+            return FeedPage(items=[], next_cursor=None)
+
         offset = 0
         if cursor:
             try:
@@ -819,12 +865,32 @@ class Query:
                 raise api_error("Invalid feed cursor", "VALIDATION_ERROR", 400)
 
         with get_session() as session:
-            viewer_id = info.context.get("user_id")
+            feed_filter = visible_post_filter(viewer_id)
+            if following:
+                feed_filter = and_(
+                    feed_filter,
+                    select(Follow.id).where(
+                        Follow.follower_id == viewer_id,
+                        Follow.following_id == DbProfile.user_id,
+                    ).exists(),
+                )
+            recommendation_score = (
+                DbPost.likes * 3
+                + DbPost.comments * 2
+                + DbPost.shares * 5
+                + DbPost.saves * 4
+                + DbPost.views / 100
+                + DbProfile.collab_score * 10
+            )
+            feed_order = (
+                (DbPost.id.desc(),) if following
+                else (desc(recommendation_score), DbPost.id.desc())
+            )
             rows = session.execute(
                 select(DbPost, DbProfile)
                 .join(DbProfile, DbPost.profile_id == DbProfile.id)
-                .where(visible_post_filter(viewer_id))
-                .order_by(DbPost.id.desc())
+                .where(feed_filter)
+                .order_by(*feed_order)
                 .offset(offset)
                 .limit(page_size + 1)
             ).all()
@@ -1167,6 +1233,7 @@ class Mutation:
             thumbnail_media = owned_media(session, profile.user_id, input.thumbnail_media_id, "Thumbnail media ID")
             if not thumbnail_media.content_type.startswith("image/"):
                 raise api_error("Thumbnail must be an image", "VALIDATION_ERROR", 400)
+            status = validate_post_status(input.status)
             post = DbPost(
                 profile_id=profile.id,
                 thumbnail=thumbnail_media.url,
@@ -1181,6 +1248,8 @@ class Mutation:
                 allow_comments=input.allow_comments,
                 allow_collabs=input.allow_collabs,
                 duration_sec=input.duration_sec,
+                status=status,
+                scheduled_at=parse_scheduled_at(input.scheduled_at, status),
             )
             session.add(post)
             session.commit()
@@ -1213,6 +1282,11 @@ class Mutation:
                 post.allow_collabs = input.allow_collabs
             if input.duration_sec is not None:
                 post.duration_sec = input.duration_sec
+            if input.status is not None:
+                post.status = validate_post_status(input.status)
+                post.scheduled_at = parse_scheduled_at(input.scheduled_at, post.status)
+            elif input.scheduled_at is not None:
+                post.scheduled_at = parse_scheduled_at(input.scheduled_at, post.status)
             session.commit()
             session.refresh(post)
             return post_to_graphql(post, viewer_id=profile.user_id)

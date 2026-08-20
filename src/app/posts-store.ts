@@ -71,6 +71,7 @@ export interface PostDraft {
   allowComments: boolean;
   allowCollabs: boolean;
   collabWith?: string;
+  scheduledAt?: string;
 }
 
 export interface UploadOptions {
@@ -274,6 +275,7 @@ export async function publishPost(
     shares: 0,
     saves: 0,
     mediaUrl: uploadedMedia?.url ?? uploaded.value,
+    ...(draft.scheduledAt ? { status: "scheduled", scheduledAt: draft.scheduledAt } : {}),
     ...(draft.collabWith ? { collabWith: draft.collabWith } : {}),
   };
 
@@ -287,6 +289,8 @@ export async function publishPost(
     allowComments: post.allowComments,
     allowCollabs: post.allowCollabs,
     durationSec: post.durationSec,
+    ...(post.status ? { status: post.status } : {}),
+    ...(post.scheduledAt ? { scheduledAt: post.scheduledAt } : {}),
     ...(post.collabWith ? { collabWith: post.collabWith } : {}),
   }) : null;
   if (backendPost) {

@@ -31,11 +31,11 @@ export interface FeedPage {
 }
 
 /** The network seam. Fails the way a fetch does when the browser is offline. */
-export async function fetchFeedPage(cursor: string | null): Promise<Result<FeedPage>> {
+export async function fetchFeedPage(cursor: string | null, following = false): Promise<Result<FeedPage>> {
   if (typeof navigator !== "undefined" && navigator.onLine === false) {
     return { ok: false, error: "You're offline. Reconnect to load the feed." };
   }
-  const page = await fetchFeedPageFromApi(cursor);
+  const page = await fetchFeedPageFromApi(cursor, 10, following);
   if (!page) return { ok: false, error: "The feed could not be loaded. Try again." };
   return {
     ok: true,
@@ -87,7 +87,7 @@ export interface FeedState {
   reload: () => void;
 }
 
-export function useFeed(): FeedState {
+export function useFeed(following = false): FeedState {
   const [items, setItems] = useState<FeedVideo[]>([]);
   const [status, setStatus] = useState<FeedStatus>("loading");
   const [error, setError] = useState("");
@@ -95,16 +95,19 @@ export function useFeed(): FeedState {
   const [reachedEnd, setReachedEnd] = useState(false);
 
   const cursor = useRef<string | null>(null);
+  const requestGeneration = useRef(0);
   // One request at a time: `loadMore` is called from a scroll effect, which can
   // fire several times before a page lands.
   const inFlight = useRef(false);
 
   const load = useCallback(async (from: string | null, append: boolean) => {
     if (inFlight.current) return;
+    const generation = requestGeneration.current;
     inFlight.current = true;
     if (append) setLoadingMore(true); else { setStatus("loading"); setError(""); }
 
-    const result = await fetchFeedPage(from);
+    const result = await fetchFeedPage(from, following);
+    if (generation !== requestGeneration.current) return;
     inFlight.current = false;
     setLoadingMore(false);
 
@@ -122,9 +125,16 @@ export function useFeed(): FeedState {
       return [...previous, ...result.value.items.filter((v) => !seen.has(v.id))];
     });
     setStatus("ready");
-  }, []);
+  }, [following]);
 
-  useEffect(() => { void load(null, false); }, [load]);
+  useEffect(() => {
+    requestGeneration.current += 1;
+    inFlight.current = false;
+    cursor.current = null;
+    setItems([]);
+    setReachedEnd(false);
+    void load(null, false);
+  }, [load]);
 
   const loadMore = useCallback(() => {
     if (inFlight.current || reachedEnd || status !== "ready") return;
