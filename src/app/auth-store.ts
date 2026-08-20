@@ -1,4 +1,4 @@
-import { BACKEND_API_URL } from "./api-config";
+import { GRAPHQL_ENDPOINT } from "./api-config";
 import { getProfileValidationError, normalizeProfilePatch } from "./profile-validation";
 
 // ─── ACCOUNT STORE ───────────────────────────────────────────────────────────
@@ -88,8 +88,6 @@ const SESSION_KEY = "connextionz.session";
 export const RESET_TTL_MS = 15 * 60 * 1000;
 
 export const PROVIDER_LABEL: Record<Provider, string> = { google: "Google", apple: "Apple" };
-
-const BACKEND_DELETE_ACCOUNT_ENDPOINT = `${BACKEND_API_URL}/auth/delete-account`;
 
 /** Seed account so the prototype is usable without registering first. */
 export const DEMO_ACCOUNT: Account = {
@@ -517,23 +515,24 @@ export async function deleteAccount(email: string): Promise<Result<null>> {
   // If the backend session is active, delete there first so server data
   // (profile, posts, follows) is removed instead of just local draft state.
   try {
-    const response = await fetch(BACKEND_DELETE_ACCOUNT_ENDPOINT, {
+    const response = await fetch(GRAPHQL_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
-      body: JSON.stringify({}),
+      body: JSON.stringify({
+        query: "mutation DeleteAccount { deleteAccount }",
+      }),
     });
-    if (response.ok) {
+    const body = await response.json() as {
+      data?: { deleteAccount?: boolean };
+      errors?: Array<{ message?: string }>;
+    };
+    if (response.ok && body.data?.deleteAccount === true && !body.errors?.length) {
       endSession();
       return { ok: true, value: null };
     }
     let message = "The account could not be deleted. Try again.";
-    try {
-      const body = await response.json() as { detail?: string };
-      if (body.detail) message = body.detail;
-    } catch {
-      // Keep the generic message when the backend response is not JSON.
-    }
+    if (body.errors?.[0]?.message) message = body.errors[0].message;
     return { ok: false, error: message };
   } catch {
     // Backend not reachable: continue with local prototype deletion behavior.
