@@ -10,24 +10,36 @@
 // collab status. A search that only matched handles would fail the thing people
 // actually type, which is a vibe ("photographer", "berlin", "open to collab").
 //
-// ⚠️  PROTOTYPE — this searches the seeded directory in memory.
+// Creators, posts and hashtags are backed by the real search API (ranked,
+// paginated, filterable) when it's reachable; the in-memory directory below
+// is only the offline/prototype fallback for sounds and for when the network
+// request itself fails.
 //
-// ── Replacing this with a real backend ──────────────────────────────────────
-//   search() → GET /search?q=…            (one response, four result sets)
-// The shape below is what the screen renders, so an API returning it needs no
-// changes here. Recent queries stay client-side either way.
+// Recent searches live in localStorage for instant, offline-safe reads, and
+// are mirrored to the backend (recordSearch/searchHistory) so history survives
+// a device switch for signed-in users. Trending searches come from the same
+// backend aggregate, falling back to trending hashtags before anyone has
+// searched for anything yet.
 
 import { type Result } from "./auth-store";
 import { CREATORS, FEED, registerCreator, type Creator, type FeedVideo, creatorById } from "./creators";
 import { noteFollowState } from "./follow-store";
 import { SOUNDS, type Sound } from "./TrendingSounds";
 import { ownFeedVideos } from "./posts-store";
-import { searchHashtags, searchPosts, searchProfiles } from "./profile-graphql";
+import {
+  clearSearchHistoryRemote, fetchSearchHistory, fetchSearchSuggestions, fetchTrendingSearches,
+  recordSearch, removeSearchHistoryEntryRemote, searchHashtags, searchPosts, searchProfiles,
+  type GraphQLFeedItem, type GraphQLProfileSummary, type GraphQLSearchSuggestion,
+  type SearchPostFilters, type SearchProfileFilters, type SearchSortBy,
+} from "./profile-graphql";
 
 const RECENTS_KEY = "connextionz.recentSearches";
 const MAX_RECENTS = 8;
 
+const isOffline = () => typeof navigator !== "undefined" && navigator.onLine === false;
+
 // ─── SHAPES ──────────────────────────────────────────────────────────────────
+
 
 export interface HashtagResult {
   tag: string;
@@ -41,12 +53,27 @@ export interface SearchResults {
   videos: FeedVideo[];
   sounds: Sound[];
   hashtags: HashtagResult[];
+  /** null once the backend says there's nothing more to page in. */
+  creatorsCursor: string | null;
+  videosCursor: string | null;
+  hashtagsCursor: string | null;
 }
 
-export const EMPTY_RESULTS: SearchResults = { creators: [], videos: [], sounds: [], hashtags: [] };
+export const EMPTY_RESULTS: SearchResults = {
+  creators: [], videos: [], sounds: [], hashtags: [],
+  creatorsCursor: null, videosCursor: null, hashtagsCursor: null,
+};
 
 export const totalResults = (r: SearchResults) =>
   r.creators.length + r.videos.length + r.sounds.length + r.hashtags.length;
+
+/** Filters the results screen can narrow a search by — one query, many facets. */
+export interface SearchFilters {
+  sortBy?: SearchSortBy;
+  hashtag?: string;
+  verifiedOnly?: boolean;
+  openToCollab?: boolean;
+}
 
 // ─── NORMALISING ─────────────────────────────────────────────────────────────
 
@@ -115,48 +142,136 @@ function run(query: string, remoteCreators?: Creator[]): SearchResults {
 
   const hashtags = HASHTAG_INDEX.filter((h) => matches(h.tag, words));
 
-  return { creators, videos, sounds, hashtags };
+  return { creators, videos, sounds, hashtags, creatorsCursor: null, videosCursor: null, hashtagsCursor: null };
 }
+
+function toCreator(profile: GraphQLProfileSummary): Creator {
+  if (profile.isFollowing != null) noteFollowState(profile.id, profile.isFollowing);
+  return registerCreator(profile);
+}
+
+function toVideo(post: GraphQLFeedItem): FeedVideo {
+  const creator = registerCreator(post.creator);
+  return {
+    id: post.id,
+    creatorId: creator.id,
+    thumbnail: post.thumbnail,
+    caption: post.caption,
+    views: post.views,
+    likes: post.likes,
+    comments: post.comments ?? 0,
+    shares: post.shares ?? 0,
+    saves: post.saves ?? 0,
+    hashtags: post.hashtags ?? [],
+    audio: post.audio ?? "Original Sound",
+    ...(post.collabWith ? { collabWith: post.collabWith } : {}),
+  };
+}
+
+const toProfileFilters = (f: SearchFilters): SearchProfileFilters => ({
+  verifiedOnly: f.verifiedOnly, openToCollab: f.openToCollab,
+});
+const toPostFilters = (f: SearchFilters): SearchPostFilters => ({
+  hashtag: f.hashtag, sortBy: f.sortBy,
+});
 
 /**
  * The network seam. Latency is real enough for the screen's loading state to be
  * worth having, and an offline browser fails the way a fetch would.
  */
-export async function search(query: string): Promise<Result<SearchResults>> {
+export async function search(query: string, filters: SearchFilters = {}): Promise<Result<SearchResults>> {
   await new Promise((r) => setTimeout(r, 320));
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
+  if (isOffline()) {
     return { ok: false, error: "You're offline. Reconnect to search creators and posts." };
   }
   if (!normalise(query)) return { ok: true, value: EMPTY_RESULTS };
-  const remoteProfiles = await searchProfiles(query);
-  const remoteCreators = remoteProfiles?.map((p) => {
-    if (p.isFollowing != null) noteFollowState(p.id, p.isFollowing);
-    return registerCreator(p);
-  });
-  const remotePosts = await searchPosts(query);
-  const remoteHashtags = await searchHashtags(query);
+
+  const [profiles, posts, hashtags] = await Promise.all([
+    searchProfiles(query, null, 20, toProfileFilters(filters)),
+    searchPosts(query, null, 20, toPostFilters(filters)),
+    searchHashtags(query, null, 20),
+  ]);
+
+  const remoteCreators = profiles.ok ? profiles.value.profiles.map(toCreator) : undefined;
   const results = run(query, remoteCreators);
-  if (remotePosts) {
-    results.videos = remotePosts.map((post): FeedVideo => {
-      const creator = registerCreator(post.creator);
-      return {
-        id: post.id,
-        creatorId: creator.id,
-        thumbnail: post.thumbnail,
-        caption: post.caption,
-        views: post.views,
-        likes: post.likes,
-        comments: post.comments ?? 0,
-        shares: post.shares ?? 0,
-        saves: post.saves ?? 0,
-        hashtags: post.hashtags ?? [],
-        audio: post.audio ?? "Original Sound",
-        ...(post.collabWith ? { collabWith: post.collabWith } : {}),
-      };
-    });
+  if (profiles.ok) results.creatorsCursor = profiles.value.nextCursor;
+  if (posts.ok) {
+    results.videos = posts.value.items.map(toVideo);
+    results.videosCursor = posts.value.nextCursor;
   }
-  if (remoteHashtags) results.hashtags = remoteHashtags;
+  if (hashtags.ok) {
+    results.hashtags = hashtags.value.hashtags;
+    results.hashtagsCursor = hashtags.value.nextCursor;
+  }
   return { ok: true, value: results };
+}
+
+/** Pages in the next batch of creators for a query already on screen. */
+export async function loadMoreCreators(
+  query: string, cursor: string | null, filters: SearchFilters = {},
+): Promise<Result<{ creators: Creator[]; nextCursor: string | null }>> {
+  const result = await searchProfiles(query, cursor, 20, toProfileFilters(filters));
+  if (!result.ok) return result;
+  return { ok: true, value: { creators: result.value.profiles.map(toCreator), nextCursor: result.value.nextCursor } };
+}
+
+/** Pages in the next batch of posts for a query already on screen. */
+export async function loadMoreVideos(
+  query: string, cursor: string | null, filters: SearchFilters = {},
+): Promise<Result<{ videos: FeedVideo[]; nextCursor: string | null }>> {
+  const result = await searchPosts(query, cursor, 20, toPostFilters(filters));
+  if (!result.ok) return result;
+  return { ok: true, value: { videos: result.value.items.map(toVideo), nextCursor: result.value.nextCursor } };
+}
+
+/** Pages in the next batch of hashtags for a query already on screen. */
+export async function loadMoreHashtags(
+  query: string, cursor: string | null,
+): Promise<Result<{ hashtags: HashtagResult[]; nextCursor: string | null }>> {
+  const result = await searchHashtags(query, cursor, 20);
+  if (!result.ok) return result;
+  return { ok: true, value: { hashtags: result.value.hashtags, nextCursor: result.value.nextCursor } };
+}
+
+// ─── AUTOCOMPLETE ────────────────────────────────────────────────────────────
+
+export type Suggestion = GraphQLSearchSuggestion;
+
+/** As-you-type suggestions: creator handles, hashtags and past searches. */
+export async function fetchSuggestions(prefix: string, limit = 8): Promise<Suggestion[]> {
+  const term = normalise(prefix);
+  if (!term) return [];
+  if (!isOffline()) {
+    const remote = await fetchSearchSuggestions(prefix, limit);
+    if (remote) return remote;
+  }
+  // Offline, or the request failed — fall back to the in-memory directory.
+  const suggestions: Suggestion[] = [];
+  for (const creator of CREATORS) {
+    if (suggestions.length >= limit) break;
+    if (creator.username.toLowerCase().startsWith(term)) {
+      suggestions.push({ type: "creator", value: creator.username, label: `@${creator.username}` });
+    }
+  }
+  for (const tag of HASHTAG_INDEX) {
+    if (suggestions.length >= limit) break;
+    if (tag.tag.startsWith(term)) {
+      suggestions.push({ type: "hashtag", value: tag.tag, label: `#${tag.tag}` });
+    }
+  }
+  return suggestions;
+}
+
+// ─── TRENDING SEARCHES ───────────────────────────────────────────────────────
+
+/** What people are actually typing, aggregated server-side over the last week. */
+export async function trendingSearches(limit = 8): Promise<string[]> {
+  if (!isOffline()) {
+    const remote = await fetchTrendingSearches(limit);
+    if (remote?.length) return remote;
+  }
+  // Nobody has searched for anything yet (or we're offline) — hashtags fill the gap.
+  return trendingHashtags().map((h) => `#${h.tag}`).slice(0, limit);
 }
 
 // ─── RECENT QUERIES ──────────────────────────────────────────────────────────
@@ -179,22 +294,44 @@ function writeRecents(values: string[]) {
   }
 }
 
+/**
+ * Merges the signed-in viewer's server-side history into the local list, so a
+ * search made on another device still shows up here. Safe to call on mount —
+ * it never throws, and does nothing useful when offline or signed out.
+ */
+export async function syncRecentSearches(): Promise<string[]> {
+  if (isOffline()) return recentSearches();
+  const remote = await fetchSearchHistory(MAX_RECENTS);
+  if (!remote?.length) return recentSearches();
+  const remoteQueries = remote.map((entry) => entry.query);
+  const merged = [
+    ...remoteQueries,
+    ...recentSearches().filter((v) => !remoteQueries.some((r) => r.toLowerCase() === v.toLowerCase())),
+  ];
+  writeRecents(merged);
+  return merged.slice(0, MAX_RECENTS);
+}
+
 /** Most recent first, no duplicates. Returns the new list so state can follow. */
 export function rememberSearch(query: string): string[] {
   const value = query.trim();
   if (!value) return recentSearches();
   const next = [value, ...recentSearches().filter((v) => v.toLowerCase() !== value.toLowerCase())];
   writeRecents(next);
+  if (!isOffline()) void recordSearch(value);
   return next.slice(0, MAX_RECENTS);
 }
 
 export function forgetSearch(query: string): string[] {
   const next = recentSearches().filter((v) => v !== query);
   writeRecents(next);
+  if (!isOffline()) void removeSearchHistoryEntryRemote(query);
   return next;
 }
 
 export function clearSearches(): string[] {
   writeRecents([]);
+  if (!isOffline()) void clearSearchHistoryRemote();
   return [];
 }
+

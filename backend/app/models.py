@@ -208,6 +208,7 @@ class Comment(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
     text: Mapped[str] = mapped_column(Text, nullable=False)
     likes: Mapped[int] = mapped_column(Integer, default=0)
+    moderation_status: Mapped[str] = mapped_column(String(20), default="approved", nullable=False, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
@@ -224,6 +225,34 @@ class CommentLike(Base):
     )
 
 
+class CommentReport(Base):
+    __tablename__ = "comment_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    comment_id: Mapped[int] = mapped_column(ForeignKey("comments.id", ondelete="CASCADE"), nullable=False, index=True)
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    reason: Mapped[str] = mapped_column(String(120), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+    __table_args__ = (
+        UniqueConstraint("comment_id", "reporter_id", name="uq_comment_reports_pair"),
+    )
+
+
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    recipient_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    actor_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    type: Mapped[str] = mapped_column(String(30), nullable=False, index=True)
+    post_id: Mapped[int | None] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), nullable=True, index=True)
+    comment_id: Mapped[int | None] = mapped_column(ForeignKey("comments.id", ondelete="CASCADE"), nullable=True, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    read: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
 class Playlist(Base):
     __tablename__ = "playlists"
 
@@ -236,6 +265,17 @@ class Playlist(Base):
     plays: Mapped[int] = mapped_column(Integer, default=0)
 
     profile: Mapped[Profile] = relationship(back_populates="playlists")
+
+
+class SearchQuery(Base):
+    __tablename__ = "search_queries"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    # Nullable so anonymous/logged-out searches can still feed trending searches.
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    query_text: Mapped[str] = mapped_column(String(200), nullable=False)
+    normalized_query: Mapped[str] = mapped_column(String(200), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
 
 class Sound(Base):

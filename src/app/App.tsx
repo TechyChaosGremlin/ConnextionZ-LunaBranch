@@ -8,7 +8,7 @@ import { InboxScreen } from "./Inbox";
 import { ThemeContext, useTheme } from "./ThemeContext";
 import { creatorById, type FeedVideo } from "./creators";
 import { useFeed } from "./feed-store";
-import { addComment, deleteComment, fetchComments, likeComment, type GraphQLComment, trackPostWatch, unlikeComment } from "./profile-graphql";
+import { addComment, deleteComment, editComment, fetchComments, likeComment, reportComment, type GraphQLComment, trackPostWatch, unlikeComment } from "./profile-graphql";
 import { activateFollowGraph } from "./follow-store";
 import { activateLikeGraph, useLike } from "./like-store";
 import { activateSaveGraph, useSave } from "./save-store";
@@ -107,6 +107,7 @@ interface Comment {
   time: string;
   isLiked?: boolean;
   canDelete?: boolean;
+  canEdit?: boolean;
 }
 
 const fmt = (n: number) =>
@@ -255,6 +256,7 @@ const toComment = (comment: GraphQLComment): Comment => ({
   time: commentTime(comment.createdAt),
   isLiked: comment.isLiked,
   canDelete: comment.canDelete,
+  canEdit: comment.canEdit,
 });
 
 function CommentSheet({
@@ -302,6 +304,22 @@ function CommentSheet({
     setComments((previous) => previous.filter((comment) => comment.id !== id));
   };
 
+  const edit = async (comment: Comment) => {
+    const nextText = window.prompt("Edit comment", comment.text)?.trim();
+    if (!nextText || nextText === comment.text) return;
+    const result = await editComment(comment.id, nextText);
+    if (!result.ok) { setError(result.error); return; }
+    setComments((previous) => previous.map((item) => item.id === comment.id ? toComment(result.value) : item));
+  };
+
+  const report = async (id: string) => {
+    const reason = window.prompt("Why are you reporting this comment?", "Inappropriate content")?.trim();
+    if (!reason) return;
+    const result = await reportComment(id, reason);
+    if (!result.ok) setError(result.error);
+    else setComments((previous) => previous.filter((comment) => comment.id !== id));
+  };
+
   const toggleLike = async (comment: Comment) => {
     const result = comment.isLiked ? await unlikeComment(comment.id) : await likeComment(comment.id);
     if (!result.ok) { setError(result.error); return; }
@@ -343,7 +361,7 @@ function CommentSheet({
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-5">
         {loading ? <p className="text-center text-sm" style={{ color: D.xIcon }}>Loading comments…</p>
           : comments.length === 0 ? <p className="text-center text-sm" style={{ color: D.xIcon }}>Be the first to comment.</p>
-          : comments.map((c) => <CommentRow key={c.id} comment={c} onDelete={remove} onLike={toggleLike} />)}
+          : comments.map((c) => <CommentRow key={c.id} comment={c} onDelete={remove} onEdit={edit} onReport={report} onLike={toggleLike} />)}
       </div>
       {error && <p className="px-4 pb-2 text-[12px]" style={{ color: "#f87171" }} role="alert">{error}</p>}
       <div className="flex-shrink-0 flex items-center gap-3 px-4 py-3" style={{ borderTop: `1px solid ${D.divider}` }}>
@@ -363,9 +381,11 @@ function CommentSheet({
   );
 }
 
-function CommentRow({ comment, onDelete, onLike }: {
+function CommentRow({ comment, onDelete, onEdit, onReport, onLike }: {
   comment: Comment;
   onDelete: (id: string) => void;
+  onEdit: (comment: Comment) => void;
+  onReport: (id: string) => void;
   onLike: (comment: Comment) => void;
 }) {
   const isDark = useTheme();
@@ -384,6 +404,8 @@ function CommentRow({ comment, onDelete, onLike }: {
         <p className="text-[13px] leading-snug mt-0.5" style={{ color: text3 }}>{comment.text}</p>
         <div className="flex items-center gap-3 mt-1">
           <button className="text-[11px] font-medium" style={{ color: text2 }}>Reply</button>
+          {comment.canEdit && <button onClick={() => void onEdit(comment)} className="text-[11px] font-medium" style={{ color: text2 }}>Edit</button>}
+          <button onClick={() => void onReport(comment.id)} className="text-[11px] font-medium" style={{ color: text2 }}>Report</button>
           {comment.canDelete && (
             <button onClick={() => void onDelete(comment.id)} aria-label="Delete comment" title="Delete comment">
               <Trash2 className="w-3.5 h-3.5" style={{ color: text2 }} />

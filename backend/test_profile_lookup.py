@@ -340,7 +340,7 @@ class ProfileQueryMutationTests(unittest.TestCase):
             search = Query().search_posts(info, "launch")
 
         self.assertEqual([post.status for post in feed.items], ["published"])
-        self.assertEqual([post.status for post in search], ["published"])
+        self.assertEqual([post.status for post in search.items], ["published"])
 
     def test_following_feed_only_includes_followed_creators(self) -> None:
         followed_post = Post(

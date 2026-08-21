@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import json
 import os
 import re
 import logging
@@ -17,7 +19,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from sqlalchemy import Float, String, and_, case, cast, desc, func, or_, select, update
+from sqlalchemy import Float, String, and_, case, cast, delete, desc, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased, selectinload
 from strawberry.fastapi import GraphQLRouter
@@ -30,7 +32,7 @@ from slowapi.util import get_remote_address
 from backend.app.auth import delete_user_account, get_user_profile, AuthContext
 from backend.app.auth_routes import create_auth_router
 from backend.app.database import get_session, run_migrations
-from backend.app.models import Comment as DbComment, CommentLike, Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, PostLike, PostReport, PostSave, PostShare, PostWatch, Profile as DbProfile, Sound as DbSound, User, UserBlock, UserMute
+from backend.app.models import Comment as DbComment, CommentLike, CommentReport, Follow, Media as DbMedia, Notification, Playlist as DbPlaylist, Post as DbPost, PostLike, PostReport, PostSave, PostShare, PostWatch, Profile as DbProfile, SearchQuery, Sound as DbSound, User, UserBlock, UserMute
 from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
 from backend.app.media_routes import create_media_router
 from backend.app.profile_validation import (
@@ -41,9 +43,9 @@ from backend.app.profile_validation import (
     validate_website,
 )
 from backend.app.graphql_types import (
-    Comment, CommentLikeResult, ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, LikeResult, Playlist,
-    PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SaveResult, ShareResult, WatchResult,
-    SoundResult, UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
+    Comment, CommentLikeResult, CommentPage, ContentItem, FeedItem, FeedPage, FollowResult, HashtagPage, HashtagResult, LikeResult,
+    Playlist, PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SaveResult, SearchHistoryEntry,
+    SearchSuggestion, ShareResult, WatchResult, SoundResult, UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
 )
 from backend.app.seed import seed_database
 logging.basicConfig(
@@ -78,6 +80,11 @@ def validate_post_status(status: str) -> str:
     if normalized not in POST_STATUSES:
         raise api_error("Post status must be draft, published, or scheduled", "VALIDATION_ERROR", 400)
     return normalized
+
+
+def normalize_search_query(value: str) -> str:
+    """Collapse whitespace/case so "Berlin  DJ" and "berlin dj" are one history entry."""
+    return re.sub(r"\s+", " ", value.strip().lower())[:200]
 
 
 def parse_scheduled_at(value: str | None, status: str) -> datetime | None:
@@ -170,6 +177,20 @@ def refresh_post_share_count(session, post_id: int) -> int:
     return post.shares
 
 
+def refresh_post_view_count(session, post_id: int) -> int:
+    post = session.execute(select(DbPost).where(DbPost.id == post_id)).scalar_one_or_none()
+    if post is None:
+        return 0
+
+    # Recomputed from distinct viewers so concurrent watch events can't double-count.
+    count = session.execute(
+        select(func.count(func.distinct(PostWatch.user_id))).where(PostWatch.post_id == post_id)
+    ).scalar_one() or 0
+    post.views = int(count)
+    session.flush()
+    return post.views
+
+
 def post_to_graphql(
     post: DbPost,
     viewer_id: int | None = None,
@@ -239,6 +260,75 @@ def shared_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[
     ).all())
 
 
+def encode_feed_cursor(post_id: int, score: float | None, following: bool, ranking_now: datetime) -> str:
+    payload = {"id": post_id, "following": following, "rankingAt": ranking_now.timestamp()}
+    if score is not None:
+        payload["score"] = score
+    return base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode()).decode().rstrip("=")
+
+
+def decode_feed_cursor(cursor: str, following: bool) -> tuple[int, float | None, datetime]:
+    try:
+        padded_cursor = cursor + "=" * (-len(cursor) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded_cursor).decode())
+        post_id = payload["id"]
+        score = payload.get("score")
+        ranking_at = payload["rankingAt"]
+        if (
+            not isinstance(post_id, int)
+            or not isinstance(payload.get("following"), bool)
+            or payload["following"] != following
+            or (score is not None and not isinstance(score, (int, float)))
+            or not isinstance(ranking_at, (int, float))
+            or not math.isfinite(ranking_at)
+        ):
+            raise ValueError
+        return post_id, float(score) if score is not None else None, datetime.utcfromtimestamp(ranking_at)
+    except (KeyError, TypeError, ValueError, OSError, OverflowError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise api_error("Invalid feed cursor", "VALIDATION_ERROR", 400) from error
+
+
+def feed_ranking_score(
+    post: DbPost,
+    profile: DbProfile,
+    followed_user_ids: set[int],
+    watched_creator_scores: dict[int, float],
+    interest_hashtags: set[str],
+    interest_audio: set[str],
+    viewer_username: str | None,
+    viewer_open_to_collab: bool,
+    now: datetime,
+) -> float:
+    views = max(post.views or 0, 0)
+    engagement = (
+        (post.likes or 0) * 3
+        + (post.comments or 0) * 4
+        + (post.shares or 0) * 6
+        + (post.saves or 0) * 5
+    ) / (views + 100)
+    age_hours = max((now - post.created_at).total_seconds() / 3600, 0)
+    freshness = max(0.0, 1.0 - age_hours / (24 * 30))
+    hashtags = {str(tag).lower().lstrip("#") for tag in (post.hashtags or [])}
+    interest_match = len(hashtags & interest_hashtags)
+    audio_match = 1.0 if post.audio and post.audio.lower() in interest_audio else 0.0
+    followed_creator = profile.user_id in followed_user_ids
+    collab_match = bool(viewer_open_to_collab and post.allow_collabs and profile.open_to_collab)
+    if post.allow_collabs and profile.open_to_collab and viewer_username and post.collab_with:
+        collab_match = collab_match or viewer_username.lower() in post.collab_with.lower()
+
+    return (
+        engagement * 100
+        + math.log1p(views) * 2
+        + freshness * 10
+        + (30 if followed_creator else 0)
+        + interest_match * 8
+        + audio_match * 4
+        + watched_creator_scores.get(profile.id, 0.0) * 2
+        + (6 if collab_match else 0)
+        + (profile.collab_score or 0) * 0.5
+    )
+
+
 def rank_feed_rows(
     rows: list[tuple[DbPost, DbProfile]],
     viewer_id: int | None,
@@ -248,38 +338,15 @@ def rank_feed_rows(
     interest_audio: set[str],
     viewer_username: str | None,
     viewer_open_to_collab: bool,
+    now: datetime | None = None,
 ) -> list[tuple[DbPost, DbProfile]]:
-    now = datetime.utcnow()
+    ranking_now = now or datetime.utcnow()
 
     def score(row: tuple[DbPost, DbProfile]) -> float:
         post, profile = row
-        views = max(post.views or 0, 0)
-        engagement = (
-            (post.likes or 0) * 3
-            + (post.comments or 0) * 4
-            + (post.shares or 0) * 6
-            + (post.saves or 0) * 5
-        ) / (views + 100)
-        age_hours = max((now - post.created_at).total_seconds() / 3600, 0)
-        freshness = max(0.0, 1.0 - age_hours / (24 * 30))
-        hashtags = {str(tag).lower().lstrip("#") for tag in (post.hashtags or [])}
-        interest_match = len(hashtags & interest_hashtags)
-        audio_match = 1.0 if post.audio and post.audio.lower() in interest_audio else 0.0
-        followed_creator = profile.user_id in followed_user_ids
-        collab_match = bool(viewer_open_to_collab and post.allow_collabs and profile.open_to_collab)
-        if post.allow_collabs and profile.open_to_collab and viewer_username and post.collab_with:
-            collab_match = collab_match or viewer_username.lower() in post.collab_with.lower()
-
-        return (
-            engagement * 100
-            + math.log1p(views) * 2
-            + freshness * 10
-            + (30 if followed_creator else 0)
-            + interest_match * 8
-            + audio_match * 4
-            + watched_creator_scores.get(profile.id, 0.0) * 2
-            + (6 if collab_match else 0)
-            + (profile.collab_score or 0) * 0.5
+        return feed_ranking_score(
+            post, profile, followed_user_ids, watched_creator_scores,
+            interest_hashtags, interest_audio, viewer_username, viewer_open_to_collab, ranking_now,
         )
 
     return sorted(rows, key=lambda row: (score(row), row[0].id), reverse=True)
@@ -396,16 +463,50 @@ def profile_summary(profile: DbProfile, is_following: bool = False) -> ProfileSu
     )
 
 
-def comment_to_graphql(comment: DbComment, author: DbProfile, viewer_id: int | None = None, liked: bool = False) -> Comment:
+def comment_to_graphql(comment: DbComment, author: DbProfile, viewer_id: int | None = None, liked: bool = False, post_owner_id: int | None = None) -> Comment:
     return Comment(
         id=str(comment.id),
         text=comment.text,
         likes=comment.likes or 0,
         is_liked=liked,
-        can_delete=viewer_id == comment.user_id,
+        can_delete=viewer_id == comment.user_id or viewer_id == post_owner_id,
+        can_edit=viewer_id == comment.user_id,
+        moderation_status=comment.moderation_status,
         created_at=comment.created_at.isoformat() + "Z",
         author=profile_summary(author),
     )
+
+
+def refresh_comment_count(session, post_id: int) -> int:
+    post = session.execute(select(DbPost).where(DbPost.id == post_id)).scalar_one_or_none()
+    if post is None:
+        return 0
+    post.comments = int(session.scalar(select(func.count(DbComment.id)).where(
+        DbComment.post_id == post_id,
+        DbComment.moderation_status == "approved",
+    )) or 0)
+    session.flush()
+    return post.comments
+
+
+def add_interaction_notification(
+    session,
+    recipient_id: int,
+    actor_id: int,
+    notification_type: str,
+    text: str,
+    post_id: int | None = None,
+    comment_id: int | None = None,
+) -> None:
+    if recipient_id != actor_id:
+        session.add(Notification(
+            recipient_id=recipient_id,
+            actor_id=actor_id,
+            type=notification_type,
+            post_id=post_id,
+            comment_id=comment_id,
+            text=text,
+        ))
 
 
 def find_profile(session, identifier: str) -> DbProfile | None:
@@ -590,26 +691,56 @@ class Query:
             )
 
     @strawberry.field(name="searchProfiles")
-    def search_profiles(self, query: str, info: Info, limit: int = 20) -> list[ProfileSummary]:
-        """Search public profiles by username or display name."""
+    def search_profiles(
+        self, query: str, info: Info, after: str | None = None, limit: int = 20,
+        verified_only: bool = False, open_to_collab: bool | None = None,
+    ) -> ProfilePage:
+        """Search public profiles by username or display name, ranked by relevance."""
         terms = [term for term in query.strip().split() if term]
         if not terms:
-            return []
-        search = "%" + "%".join(terms) + "%"
+            return ProfilePage(profiles=[], next_cursor=None)
         page_size = max(1, min(limit, 50))
+        try:
+            offset = max(0, int(after or "0"))
+        except ValueError as error:
+            raise api_error("Invalid search cursor", "VALIDATION_ERROR", 400) from error
         user_id = info.context.get("user_id")
+        contains_pattern = ("%" + "%".join(terms) + "%").lower()
+        prefix_pattern = terms[0].lower() + "%"
+        exact_value = " ".join(terms).lower()
+        rank_score = case(
+            (func.lower(DbProfile.username) == exact_value, 100),
+            (func.lower(DbProfile.username).like(prefix_pattern), 70),
+            (func.lower(DbProfile.display_name).like(prefix_pattern), 55),
+            (func.lower(DbProfile.username).like(contains_pattern), 35),
+            (func.lower(DbProfile.display_name).like(contains_pattern), 25),
+            else_=10,
+        )
         with get_session() as session:
-            profiles = session.execute(
-                select(DbProfile)
+            statement = (
+                select(DbProfile, rank_score.label("rank_score"))
                 .where(or_(
-                    func.lower(DbProfile.username).like(search.lower()),
-                    func.lower(DbProfile.display_name).like(search.lower()),
+                    func.lower(DbProfile.username).like(contains_pattern),
+                    func.lower(DbProfile.display_name).like(contains_pattern),
                 ))
                 .where(profile_visibility_filter(user_id))
-                .order_by(DbProfile.followers.desc(), DbProfile.username)
-                .limit(page_size)
-            ).scalars().all()
-            return [profile_summary(profile) for profile in profiles]
+            )
+            if verified_only:
+                statement = statement.where(DbProfile.verified.is_(True))
+            if open_to_collab is not None:
+                statement = statement.where(DbProfile.open_to_collab.is_(open_to_collab))
+            rows = session.execute(
+                statement
+                .order_by(desc("rank_score"), DbProfile.followers.desc(), DbProfile.username)
+                .offset(offset)
+                .limit(page_size + 1)
+            ).all()
+            has_more = len(rows) > page_size
+            rows = rows[:page_size]
+            return ProfilePage(
+                profiles=[profile_summary(profile) for profile, _score in rows],
+                next_cursor=str(offset + page_size) if has_more else None,
+            )
 
     @strawberry.field(name="suggestedProfiles")
     def suggested_profiles(self, info: Info, limit: int = 6) -> list[ProfileSummary]:
@@ -627,13 +758,32 @@ class Query:
             return [profile_summary(profile) for profile in profiles]
 
     @strawberry.field(name="searchPosts")
-    def search_posts(self, info: Info, query: str, limit: int = 20) -> list[FeedItem]:
-        """Search published posts by caption, hashtag, audio, or creator."""
+    def search_posts(
+        self, info: Info, query: str, after: str | None = None, limit: int = 20,
+        hashtag: str | None = None, sort_by: str = "relevance",
+    ) -> FeedPage:
+        """Search published posts by caption, hashtag, audio, or creator, ranked by relevance."""
         terms = [term for term in query.strip().split() if term]
         if not terms:
-            return []
+            return FeedPage(items=[], next_cursor=None)
         page_size = max(1, min(limit, 50))
+        try:
+            offset = max(0, int(after or "0"))
+        except ValueError as error:
+            raise api_error("Invalid search cursor", "VALIDATION_ERROR", 400) from error
         viewer_id = info.context.get("user_id")
+        contains_pattern = f"%{'%'.join(terms)}%"
+        prefix_pattern = f"{terms[0]}%"
+        rank_score = (
+            case((DbPost.caption.ilike(prefix_pattern), 30), else_=0)
+            + case((DbPost.caption.ilike(contains_pattern), 15), else_=0)
+            + case((cast(DbPost.hashtags, String).ilike(contains_pattern), 25), else_=0)
+            + case((DbPost.audio.ilike(contains_pattern), 10), else_=0)
+            + case((or_(
+                DbProfile.username.ilike(contains_pattern),
+                DbProfile.display_name.ilike(contains_pattern),
+            ), 20), else_=0)
+        )
         with get_session() as session:
             filters = []
             for term in terms:
@@ -645,40 +795,55 @@ class Query:
                     DbProfile.username.ilike(pattern),
                     DbProfile.display_name.ilike(pattern),
                 ))
-            rows = session.execute(
-                select(DbPost, DbProfile)
+            statement = (
+                select(DbPost, DbProfile, rank_score.label("rank_score"))
                 .join(DbProfile, DbPost.profile_id == DbProfile.id)
                 .where(*filters)
                 .where(visible_post_filter(viewer_id))
-                .order_by(DbPost.views.desc(), DbPost.id.desc())
-                .limit(page_size)
-            ).all()
-            liked_ids = liked_post_ids(session, viewer_id, [post for post, _ in rows])
-            saved_ids = saved_post_ids(session, viewer_id, [post for post, _ in rows])
-            shared_ids = shared_post_ids(session, viewer_id, [post for post, _ in rows])
-            return [
-                feed_item(
-                    post,
-                    profile,
-                    viewer_id=viewer_id,
-                    liked_post_ids=liked_ids,
-                    saved_post_ids=saved_ids,
-                    shared_post_ids=shared_ids,
-                )
-                for post, profile in rows
-            ]
+            )
+            if hashtag:
+                statement = statement.where(cast(DbPost.hashtags, String).ilike(f"%{hashtag.strip().lstrip('#')}%"))
+            if sort_by == "recent":
+                statement = statement.order_by(DbPost.created_at.desc(), DbPost.id.desc())
+            elif sort_by == "popular":
+                statement = statement.order_by(DbPost.views.desc(), DbPost.id.desc())
+            else:
+                statement = statement.order_by(desc("rank_score"), DbPost.views.desc(), DbPost.id.desc())
+            rows = session.execute(statement.offset(offset).limit(page_size + 1)).all()
+            has_more = len(rows) > page_size
+            rows = rows[:page_size]
+            posts_only = [post for post, _profile, _score in rows]
+            liked_ids = liked_post_ids(session, viewer_id, posts_only)
+            saved_ids = saved_post_ids(session, viewer_id, posts_only)
+            shared_ids = shared_post_ids(session, viewer_id, posts_only)
+            return FeedPage(
+                items=[
+                    feed_item(
+                        post, profile, viewer_id=viewer_id,
+                        liked_post_ids=liked_ids, saved_post_ids=saved_ids, shared_post_ids=shared_ids,
+                    )
+                    for post, profile, _score in rows
+                ],
+                next_cursor=str(offset + page_size) if has_more else None,
+            )
 
     @strawberry.field(name="searchHashtags")
-    def search_hashtags(self, query: str, limit: int = 20) -> list[HashtagResult]:
-        """Search hashtags stored on published posts."""
+    def search_hashtags(self, query: str, after: str | None = None, limit: int = 20) -> HashtagPage:
+        """Search hashtags stored on published, approved posts."""
         term = query.strip().lstrip("#").lower()
         if not term:
-            return []
+            return HashtagPage(hashtags=[], next_cursor=None)
         page_size = max(1, min(limit, 50))
+        try:
+            offset = max(0, int(after or "0"))
+        except ValueError as error:
+            raise api_error("Invalid search cursor", "VALIDATION_ERROR", 400) from error
         counts: dict[str, tuple[int, int]] = {}
         with get_session() as session:
             posts = session.execute(
-                select(DbPost.hashtags, DbPost.views).where(DbPost.status == "published")
+                select(DbPost.hashtags, DbPost.views).where(
+                    DbPost.status == "published", DbPost.moderation_status == "approved",
+                )
             ).all()
         for hashtags, views in posts:
             for value in hashtags or []:
@@ -686,12 +851,127 @@ class Query:
                 if tag and term in tag:
                     post_count, view_count = counts.get(tag, (0, 0))
                     counts[tag] = (post_count + 1, view_count + (views or 0))
-        return [
-            HashtagResult(tag=tag, posts=post_count, views=view_count)
-            for tag, (post_count, view_count) in sorted(
-                counts.items(), key=lambda item: (-item[1][1], item[0])
-            )[:page_size]
-        ]
+        ranked = sorted(
+            counts.items(),
+            key=lambda item: (0 if item[0].startswith(term) else 1, -item[1][1], item[0]),
+        )
+        page = ranked[offset:offset + page_size + 1]
+        has_more = len(page) > page_size
+        page = page[:page_size]
+        return HashtagPage(
+            hashtags=[HashtagResult(tag=tag, posts=post_count, views=view_count) for tag, (post_count, view_count) in page],
+            next_cursor=str(offset + page_size) if has_more else None,
+        )
+
+    @strawberry.field(name="searchSuggestions")
+    def search_suggestions(self, prefix: str, info: Info, limit: int = 8) -> list[SearchSuggestion]:
+        """Autocomplete rows for a partially typed query: creators, hashtags, and past searches."""
+        term = normalize_search_query(prefix)
+        if not term:
+            return []
+        page_size = max(1, min(limit, 20))
+        user_id = info.context.get("user_id")
+        suggestions: list[SearchSuggestion] = []
+        with get_session() as session:
+            creators = session.execute(
+                select(DbProfile)
+                .where(or_(
+                    func.lower(DbProfile.username).like(f"{term}%"),
+                    func.lower(DbProfile.display_name).like(f"{term}%"),
+                ))
+                .where(profile_visibility_filter(user_id))
+                .order_by(DbProfile.followers.desc())
+                .limit(4)
+            ).scalars().all()
+            for profile in creators:
+                suggestions.append(SearchSuggestion(type="creator", value=profile.username, label=f"@{profile.username}"))
+
+            history_rows = session.execute(
+                select(SearchQuery.query_text, SearchQuery.normalized_query)
+                .where(SearchQuery.normalized_query.like(f"{term}%"))
+                .order_by(SearchQuery.created_at.desc())
+                .limit(20)
+            ).all()
+            seen_queries: set[str] = set()
+            for query_text, normalized in history_rows:
+                if normalized in seen_queries or normalized == term:
+                    continue
+                seen_queries.add(normalized)
+                suggestions.append(SearchSuggestion(type="query", value=query_text, label=query_text))
+                if len(seen_queries) >= 3:
+                    break
+
+            posts = session.execute(
+                select(DbPost.hashtags).where(
+                    DbPost.status == "published", DbPost.moderation_status == "approved",
+                )
+            ).all()
+        seen_tags: set[str] = set()
+        for (hashtags,) in posts:
+            for value in hashtags or []:
+                tag = str(value).strip().lstrip("#").lower()
+                if tag.startswith(term) and tag not in seen_tags:
+                    seen_tags.add(tag)
+                    suggestions.append(SearchSuggestion(type="hashtag", value=tag, label=f"#{tag}"))
+                if len(seen_tags) >= 4:
+                    break
+            if len(seen_tags) >= 4:
+                break
+        return suggestions[:page_size]
+
+    @strawberry.field(name="searchHistory")
+    def search_history(self, info: Info, limit: int = 10) -> list[SearchHistoryEntry]:
+        """The signed-in viewer's own recent searches, newest first, deduped."""
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            return []
+        page_size = max(1, min(limit, 50))
+        with get_session() as session:
+            rows = session.execute(
+                select(SearchQuery.query_text, SearchQuery.normalized_query, SearchQuery.created_at)
+                .where(SearchQuery.user_id == user_id)
+                .order_by(SearchQuery.created_at.desc())
+                .limit(page_size * 5)
+            ).all()
+        seen: set[str] = set()
+        history: list[SearchHistoryEntry] = []
+        for query_text, normalized, created_at in rows:
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            history.append(SearchHistoryEntry(query=query_text, created_at=created_at.isoformat() + "Z"))
+            if len(history) >= page_size:
+                break
+        return history
+
+    @strawberry.field(name="trendingSearches")
+    def trending_searches(self, limit: int = 8) -> list[str]:
+        """The most repeated searches across everyone in the last week."""
+        page_size = max(1, min(limit, 20))
+        since = datetime.utcnow() - timedelta(days=7)
+        with get_session() as session:
+            rows = session.execute(
+                select(SearchQuery.normalized_query, func.count(SearchQuery.id).label("cnt"))
+                .where(SearchQuery.created_at >= since)
+                .group_by(SearchQuery.normalized_query)
+                .order_by(desc("cnt"))
+                .limit(page_size)
+            ).all()
+            if rows:
+                return [normalized for normalized, _cnt in rows]
+            # No search history yet — fall back to trending hashtags so the screen isn't empty.
+            posts = session.execute(
+                select(DbPost.hashtags, DbPost.views).where(
+                    DbPost.status == "published", DbPost.moderation_status == "approved",
+                )
+            ).all()
+        counts: dict[str, int] = {}
+        for hashtags, views in posts:
+            for value in hashtags or []:
+                tag = str(value).strip().lstrip("#").lower()
+                if tag:
+                    counts[tag] = counts.get(tag, 0) + (views or 0)
+        return [tag for tag, _views in sorted(counts.items(), key=lambda item: -item[1])[:page_size]]
 
     @strawberry.field(name="trendingSounds")
     def trending_sounds(self, genre: str | None = None, limit: int = 50) -> list[SoundResult]:
@@ -952,7 +1232,7 @@ class Query:
             rows = session.execute(
                 select(DbComment, DbProfile)
                 .join(DbProfile, DbComment.user_id == DbProfile.user_id)
-                .where(DbComment.post_id == post_id_value)
+                .where(DbComment.post_id == post_id_value, DbComment.moderation_status == "approved")
                 .order_by(DbComment.created_at.desc(), DbComment.id.desc())
                 .limit(page_size)
             ).all()
@@ -965,9 +1245,45 @@ class Query:
                     )
                 ).all())
             return [
-                comment_to_graphql(comment, author, viewer_id, comment.id in liked_ids)
+                comment_to_graphql(comment, author, viewer_id, comment.id in liked_ids, post[1].user_id)
                 for comment, author in rows
             ]
+
+    @strawberry.field(name="commentsPage")
+    def comments_page(self, post_id: strawberry.ID, info: Info, after: str | None = None, limit: int = 50) -> CommentPage:
+        post_id_value = parse_int_id(post_id, "Post ID")
+        page_size = max(1, min(limit, 100))
+        viewer_id = info.context.get("user_id")
+        try:
+            offset = max(0, int(after or "0"))
+        except ValueError as error:
+            raise api_error("Invalid comment cursor", "VALIDATION_ERROR", 400) from error
+        with get_session() as session:
+            post = session.execute(
+                select(DbPost, DbProfile)
+                .join(DbProfile, DbPost.profile_id == DbProfile.id)
+                .where(DbPost.id == post_id_value, visible_post_filter(viewer_id))
+            ).first()
+            if post is None or not post[0].allow_comments:
+                return CommentPage(comments=[], next_cursor=None)
+            rows = session.execute(
+                select(DbComment, DbProfile)
+                .join(DbProfile, DbComment.user_id == DbProfile.user_id)
+                .where(DbComment.post_id == post_id_value, DbComment.moderation_status == "approved")
+                .order_by(DbComment.created_at.desc(), DbComment.id.desc())
+                .offset(offset)
+                .limit(page_size + 1)
+            ).all()
+            has_more = len(rows) > page_size
+            rows = rows[:page_size]
+            liked_ids = set(session.scalars(select(CommentLike.comment_id).where(
+                CommentLike.user_id == viewer_id,
+                CommentLike.comment_id.in_([comment.id for comment, _ in rows]),
+            )).all()) if viewer_id and rows else set()
+            return CommentPage(
+                comments=[comment_to_graphql(comment, author, viewer_id, comment.id in liked_ids, post[1].user_id) for comment, author in rows],
+                next_cursor=str(offset + page_size) if has_more else None,
+            )
 
     @strawberry.field
     def feed(self, info: Info, cursor: str | None = None, limit: int = 10, following: bool = False) -> FeedPage:
@@ -976,12 +1292,9 @@ class Query:
         if following and viewer_id is None:
             return FeedPage(items=[], next_cursor=None)
 
-        offset = 0
-        if cursor:
-            try:
-                offset = max(0, int(cursor))
-            except ValueError:
-                raise api_error("Invalid feed cursor", "VALIDATION_ERROR", 400)
+        cursor_post_id, cursor_score, ranking_now = (
+            decode_feed_cursor(cursor, following) if cursor else (None, None, datetime.utcnow())
+        )
 
         with get_session() as session:
             feed_filter = visible_post_filter(viewer_id)
@@ -1010,10 +1323,16 @@ class Query:
                     .join(DbPost, PostWatch.post_id == DbPost.id)
                     .where(PostWatch.user_id == viewer_id)
                 ).all()
+                # Cap each post's contribution to its single best watch event so repeated/spammed
+                # watch events on the same post can't inflate a creator's affinity score.
+                best_watch_per_post: dict[int, tuple[float, DbPost]] = {}
                 for watch, watched_post in watched_rows:
-                    watched_creator_scores[watched_post.profile_id] = watched_creator_scores.get(watched_post.profile_id, 0.0) + (
-                        3.0 if watch.completed else 1.5 if watch.rewatched else 0.5
-                    )
+                    quality = 3.0 if watch.completed else 1.5 if watch.rewatched else 0.5
+                    existing = best_watch_per_post.get(watch.post_id)
+                    if existing is None or quality > existing[0]:
+                        best_watch_per_post[watch.post_id] = (quality, watched_post)
+                for quality, watched_post in best_watch_per_post.values():
+                    watched_creator_scores[watched_post.profile_id] = watched_creator_scores.get(watched_post.profile_id, 0.0) + quality
                     interest_hashtags.update(str(tag).lower().lstrip("#") for tag in (watched_post.hashtags or []))
                     if watched_post.audio:
                         interest_audio.add(watched_post.audio.lower())
@@ -1031,12 +1350,22 @@ class Query:
             ).all()
             if following:
                 rows.sort(key=lambda row: (row[0].id,), reverse=True)
+                if cursor_post_id is not None:
+                    rows = [row for row in rows if row[0].id < cursor_post_id]
             else:
                 rows = rank_feed_rows(
                     rows, viewer_id, followed_user_ids, watched_creator_scores,
-                    interest_hashtags, interest_audio, viewer_username, viewer_open_to_collab,
+                    interest_hashtags, interest_audio, viewer_username, viewer_open_to_collab, ranking_now,
                 )
-            rows = rows[offset:offset + page_size + 1]
+                if cursor_post_id is not None and cursor_score is not None:
+                    rows = [
+                        row for row in rows
+                        if row[0].id != cursor_post_id and (feed_ranking_score(
+                            row[0], row[1], followed_user_ids, watched_creator_scores,
+                            interest_hashtags, interest_audio, viewer_username, viewer_open_to_collab, ranking_now,
+                        ), row[0].id) < (cursor_score, cursor_post_id)
+                    ]
+            rows = rows[:page_size + 1]
             has_more = len(rows) > page_size
             rows = rows[:page_size]
             liked_ids = liked_post_ids(session, viewer_id, [post for post, _ in rows])
@@ -1054,7 +1383,18 @@ class Query:
                     )
                     for post, profile in rows
                 ],
-                next_cursor=str(offset + page_size) if has_more else None,
+                next_cursor=(
+                    encode_feed_cursor(
+                        rows[-1][0].id,
+                        None if following else feed_ranking_score(
+                            rows[-1][0], rows[-1][1], followed_user_ids, watched_creator_scores,
+                            interest_hashtags, interest_audio, viewer_username, viewer_open_to_collab, ranking_now,
+                        ),
+                        following,
+                        ranking_now,
+                    )
+                    if has_more else None
+                ),
             )
 
 
@@ -1161,17 +1501,41 @@ class Mutation:
             ).first()
             if row is None:
                 raise api_error("Post not found", "NOT_FOUND", 404)
-            post, _ = row
+            post, post_profile = row
             if not post.allow_comments:
                 raise api_error("Comments are disabled for this post", "FORBIDDEN", 403)
 
             comment = DbComment(post_id=post_id_value, user_id=user_id, text=body)
             session.add(comment)
-            post.comments = (post.comments or 0) + 1
+            session.flush()
+            refresh_comment_count(session, post_id_value)
+            add_interaction_notification(
+                session, post_profile.user_id, user_id, "comment", body,
+                post_id=post.id, comment_id=comment.id,
+            )
             session.commit()
             session.refresh(comment)
             author = session.execute(select(DbProfile).where(DbProfile.user_id == user_id)).scalar_one()
-            return comment_to_graphql(comment, author, user_id)
+            return comment_to_graphql(comment, author, user_id, post_owner_id=post_profile.user_id)
+
+    @strawberry.mutation(name="editComment")
+    def edit_comment(self, id: strawberry.ID, text: str, info: Info) -> Comment:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to edit a comment", "UNAUTHENTICATED", 401)
+        body = text.strip()
+        if not body or len(body) > 500:
+            raise api_error("Comment must be between 1 and 500 characters", "VALIDATION_ERROR", 400)
+        comment_id = parse_int_id(id, "Comment ID")
+        with get_session() as session:
+            comment = session.execute(select(DbComment).where(DbComment.id == comment_id)).scalar_one_or_none()
+            if comment is None or comment.user_id != user_id:
+                raise api_error("Comment not found", "NOT_FOUND", 404)
+            comment.text = body
+            session.commit()
+            author = session.execute(select(DbProfile).where(DbProfile.user_id == user_id)).scalar_one()
+            post_owner_id = session.scalar(select(DbProfile.user_id).join(DbPost, DbPost.profile_id == DbProfile.id).where(DbPost.id == comment.post_id))
+            return comment_to_graphql(comment, author, user_id, post_owner_id=post_owner_id)
 
     @strawberry.mutation(name="deleteComment")
     def delete_comment(self, id: strawberry.ID, info: Info) -> bool:
@@ -1180,15 +1544,37 @@ class Mutation:
             raise api_error("Must be logged in to delete a comment", "UNAUTHENTICATED", 401)
         comment_id = parse_int_id(id, "Comment ID")
         with get_session() as session:
-            comment = session.execute(
-                select(DbComment).where(DbComment.id == comment_id, DbComment.user_id == user_id)
-            ).scalar_one_or_none()
+            comment = session.execute(select(DbComment).where(DbComment.id == comment_id)).scalar_one_or_none()
             if comment is None:
                 raise api_error("Comment not found", "NOT_FOUND", 404)
-            post = session.execute(select(DbPost).where(DbPost.id == comment.post_id)).scalar_one_or_none()
+            post = session.execute(select(DbPost, DbProfile).join(DbProfile, DbPost.profile_id == DbProfile.id).where(DbPost.id == comment.post_id)).first()
+            if post is None or (comment.user_id != user_id and post[1].user_id != user_id):
+                raise api_error("Comment not found", "NOT_FOUND", 404)
             session.delete(comment)
-            if post is not None:
-                post.comments = max(0, (post.comments or 0) - 1)
+            refresh_comment_count(session, comment.post_id)
+            session.commit()
+            return True
+
+    @strawberry.mutation(name="reportComment")
+    def report_comment(self, id: strawberry.ID, reason: str, info: Info) -> bool:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to report a comment", "UNAUTHENTICATED", 401)
+        normalized_reason = reason.strip()
+        if not normalized_reason or len(normalized_reason) > 120:
+            raise api_error("Report reason must be between 1 and 120 characters", "VALIDATION_ERROR", 400)
+        comment_id = parse_int_id(id, "Comment ID")
+        with get_session() as session:
+            comment = session.execute(select(DbComment).where(DbComment.id == comment_id)).scalar_one_or_none()
+            visible = session.scalar(select(DbPost.id).join(DbProfile, DbPost.profile_id == DbProfile.id).where(DbPost.id == (comment.post_id if comment else -1), visible_post_filter(user_id)))
+            if comment is None or visible is None:
+                raise api_error("Comment not found", "NOT_FOUND", 404)
+            existing = session.scalar(select(CommentReport.id).where(CommentReport.comment_id == comment_id, CommentReport.reporter_id == user_id))
+            if existing is not None:
+                return True
+            session.add(CommentReport(comment_id=comment_id, reporter_id=user_id, reason=normalized_reason))
+            comment.moderation_status = "reported"
+            refresh_comment_count(session, comment.post_id)
             session.commit()
             return True
 
@@ -1228,6 +1614,11 @@ class Mutation:
             comment.likes = session.scalar(
                 select(func.count(CommentLike.id)).where(CommentLike.comment_id == comment_id)
             ) or 0
+            if liked and existing is None:
+                add_interaction_notification(
+                    session, comment.user_id, user_id, "comment_like", "liked your comment",
+                    post_id=comment.post_id, comment_id=comment.id,
+                )
             session.commit()
             return CommentLikeResult(liked=liked, likes=comment.likes)
 
@@ -1253,6 +1644,12 @@ class Mutation:
                 except IntegrityError:
                     session.rollback()
                 else:
+                    post_owner_id = session.scalar(
+                        select(DbProfile.user_id).where(DbProfile.id == post.profile_id)
+                    )
+                    add_interaction_notification(
+                        session, post_owner_id, user_id, "like", "liked your post", post_id=post.id,
+                    )
                     session.execute(
                         update(DbPost)
                         .where(DbPost.id == post_id)
@@ -1310,6 +1707,12 @@ class Mutation:
                 except IntegrityError:
                     session.rollback()
                 else:
+                    post_owner_id = session.scalar(
+                        select(DbProfile.user_id).where(DbProfile.id == post.profile_id)
+                    )
+                    add_interaction_notification(
+                        session, post_owner_id, user_id, "save", "saved your post", post_id=post.id,
+                    )
                     session.execute(
                         update(DbPost)
                         .where(DbPost.id == post_id)
@@ -1366,6 +1769,12 @@ class Mutation:
                 except IntegrityError:
                     session.rollback()
                 else:
+                    post_owner_id = session.scalar(
+                        select(DbProfile.user_id).where(DbProfile.id == post.profile_id)
+                    )
+                    add_interaction_notification(
+                        session, post_owner_id, user_id, "share", "shared your post", post_id=post.id,
+                    )
                     session.execute(
                         update(DbPost)
                         .where(DbPost.id == post_id)
@@ -1424,29 +1833,34 @@ class Mutation:
             if post is None:
                 raise api_error("Post not found", "NOT_FOUND", 404)
 
+            # Clamp to the post's actual duration so clients can't fake arbitrarily long/complete watches.
+            clamped_seconds = min(watched_seconds, post.duration_sec) if post.duration_sec > 0 else watched_seconds
+            derived_completed = completed and (post.duration_sec <= 0 or clamped_seconds >= post.duration_sec * 0.9)
+
             has_prior_watch = session.execute(
                 select(PostWatch.id).where(
                     PostWatch.post_id == parsed_post_id,
                     PostWatch.user_id == user_id,
                 ).limit(1)
             ).first() is not None
-            session.add(PostWatch(
+            watch_event = PostWatch(
                 post_id=parsed_post_id,
                 user_id=user_id,
-                watched_seconds=watched_seconds,
-                completed=completed,
-                rewatched=rewatched or has_prior_watch,
-            ))
-            if not has_prior_watch:
-                post.views += 1
-            session.commit()
-            session.refresh(post)
-            return WatchResult(
-                views=post.views,
-                watched_seconds=watched_seconds,
-                completed=completed,
+                watched_seconds=clamped_seconds,
+                completed=derived_completed,
                 rewatched=rewatched or has_prior_watch,
             )
+            session.add(watch_event)
+
+            view_count = refresh_post_view_count(session, parsed_post_id)
+            session.commit()
+            return WatchResult(
+                views=view_count,
+                watched_seconds=watch_event.watched_seconds,
+                completed=watch_event.completed,
+                rewatched=watch_event.rewatched,
+            )
+
 
     @strawberry.mutation
     def follow(self, username: str, info: Info) -> FollowResult:
@@ -1469,6 +1883,9 @@ class Mutation:
                     follower_id=follower.user_id,
                     following_id=target.user_id,
                 ))
+                add_interaction_notification(
+                    session, target.user_id, follower.user_id, "follow", "started following you",
+                )
                 follower.following += 1
                 target.followers += 1
                 try:
@@ -1504,6 +1921,45 @@ class Mutation:
                 following=False, followers=target.followers,
                 following_count=follower.following,
             )
+
+    @strawberry.mutation(name="recordSearch")
+    def record_search(self, query: str, info: Info) -> bool:
+        """Log a submitted search so it can surface in history and trending."""
+        value = query.strip()
+        if not value or len(value) > 200:
+            return False
+        with get_session() as session:
+            session.add(SearchQuery(
+                user_id=info.context.get("user_id"),
+                query_text=value,
+                normalized_query=normalize_search_query(value),
+            ))
+            session.commit()
+        return True
+
+    @strawberry.mutation(name="clearSearchHistory")
+    def clear_search_history(self, info: Info) -> bool:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            return False
+        with get_session() as session:
+            session.execute(delete(SearchQuery).where(SearchQuery.user_id == user_id))
+            session.commit()
+        return True
+
+    @strawberry.mutation(name="removeSearchHistoryEntry")
+    def remove_search_history_entry(self, query: str, info: Info) -> bool:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            return False
+        normalized = normalize_search_query(query)
+        with get_session() as session:
+            session.execute(delete(SearchQuery).where(
+                SearchQuery.user_id == user_id,
+                SearchQuery.normalized_query == normalized,
+            ))
+            session.commit()
+        return True
 
     @strawberry.mutation(name="createPost")
     def create_post(self, input: PostInput, info: Info) -> ContentItem:

@@ -87,8 +87,16 @@ class Comment:
     likes: int = 0
     is_liked: bool = strawberry.field(name="isLiked", default=False)
     can_delete: bool = strawberry.field(name="canDelete", default=False)
+    can_edit: bool = strawberry.field(name="canEdit", default=False)
+    moderation_status: str = strawberry.field(name="moderationStatus", default="approved")
     created_at: str = strawberry.field(name="createdAt")
     author: ProfileSummary
+
+
+@strawberry.type
+class CommentPage:
+    comments: list[Comment]
+    next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
 
 
 @strawberry.type
@@ -153,6 +161,26 @@ class HashtagResult:
     tag: str
     posts: int
     views: int
+
+
+@strawberry.type
+class HashtagPage:
+    hashtags: list[HashtagResult]
+    next_cursor: str | None = strawberry.field(name="nextCursor", default=None)
+
+
+@strawberry.type
+class SearchSuggestion:
+    """One autocomplete row — a creator handle, a hashtag, or a past query."""
+    type: str
+    value: str
+    label: str
+
+
+@strawberry.type
+class SearchHistoryEntry:
+    query: str
+    created_at: str = strawberry.field(name="createdAt")
 
 
 @strawberry.type

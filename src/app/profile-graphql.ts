@@ -61,6 +61,8 @@ export type GraphQLComment = {
   likes: number;
   isLiked: boolean;
   canDelete: boolean;
+  canEdit: boolean;
+  moderationStatus: string;
   createdAt: string;
   author: GraphQLProfileSummary;
 };
@@ -210,7 +212,7 @@ export async function fetchComments(postId: string, limit = 100): Promise<Result
   const result = await graphqlRequestResult<{ comments: GraphQLComment[] }>(`
     query Comments($postId: ID!, $limit: Int!) {
       comments(postId: $postId, limit: $limit) {
-        id text likes isLiked canDelete createdAt
+        id text likes isLiked canDelete canEdit moderationStatus createdAt
         author { id username displayName avatarUrl avatarColor }
       }
     }
@@ -222,12 +224,31 @@ export async function addComment(postId: string, text: string): Promise<Result<G
   const result = await graphqlRequestResult<{ addComment: GraphQLComment }>(`
     mutation AddComment($postId: ID!, $text: String!) {
       addComment(postId: $postId, text: $text) {
-        id text likes isLiked canDelete createdAt
+        id text likes isLiked canDelete canEdit moderationStatus createdAt
         author { id username displayName avatarUrl avatarColor }
       }
     }
   `, { postId, text });
   return result.ok ? { ok: true, value: result.value.addComment } : result;
+}
+
+export async function editComment(id: string, text: string): Promise<Result<GraphQLComment>> {
+  const result = await graphqlRequestResult<{ editComment: GraphQLComment }>(`
+    mutation EditComment($id: ID!, $text: String!) {
+      editComment(id: $id, text: $text) {
+        id text likes isLiked canDelete canEdit moderationStatus createdAt
+        author { id username displayName avatarUrl avatarColor }
+      }
+    }
+  `, { id, text });
+  return result.ok ? { ok: true, value: result.value.editComment } : result;
+}
+
+export async function reportComment(id: string, reason: string): Promise<Result<boolean>> {
+  const result = await graphqlRequestResult<{ reportComment: boolean }>(`
+    mutation ReportComment($id: ID!, $reason: String!) { reportComment(id: $id, reason: $reason) }
+  `, { id, reason });
+  return result.ok ? { ok: true, value: result.value.reportComment } : result;
 }
 
 export async function deleteComment(id: string): Promise<Result<boolean>> {
@@ -253,27 +274,110 @@ export async function unlikeComment(id: string): Promise<Result<GraphQLCommentLi
   return result.ok ? { ok: true, value: result.value.unlikeComment } : result;
 }
 
-export async function searchPosts(query: string, limit = 20): Promise<GraphQLFeedItem[] | null> {
-  const data = await graphqlRequest<{ searchPosts: GraphQLFeedItem[] }>(`
-    query SearchPosts($query: String!, $limit: Int!) {
-      searchPosts(query: $query, limit: $limit) {
-        id thumbnail mediaUrl caption views likes isLiked hashtags audio visibility
-        allowComments allowCollabs durationSec comments shares saves isSaved isShared collabWith
-        creator { id username displayName avatarUrl avatarColor verified }
+export type GraphQLFeedPage = {
+  items: GraphQLFeedItem[];
+  nextCursor: string | null;
+};
+
+export type GraphQLHashtagPage = {
+  hashtags: GraphQLHashtagResult[];
+  nextCursor: string | null;
+};
+
+export type SearchSortBy = "relevance" | "recent" | "popular";
+
+export type SearchPostFilters = {
+  hashtag?: string;
+  sortBy?: SearchSortBy;
+};
+
+export type SearchProfileFilters = {
+  verifiedOnly?: boolean;
+  openToCollab?: boolean;
+};
+
+export async function searchPosts(
+  query: string, after: string | null = null, limit = 20, filters: SearchPostFilters = {},
+): Promise<Result<GraphQLFeedPage>> {
+  const result = await graphqlRequestResult<{ searchPosts: GraphQLFeedPage }>(`
+    query SearchPosts($query: String!, $after: String, $limit: Int!, $hashtag: String, $sortBy: String!) {
+      searchPosts(query: $query, after: $after, limit: $limit, hashtag: $hashtag, sortBy: $sortBy) {
+        nextCursor
+        items {
+          id thumbnail mediaUrl caption views likes isLiked hashtags audio visibility
+          allowComments allowCollabs durationSec comments shares saves isSaved isShared collabWith
+          creator { id username displayName avatarUrl avatarColor verified }
+        }
       }
     }
-  `, { query, limit });
-  return data?.searchPosts ?? null;
+  `, { query, after, limit, hashtag: filters.hashtag ?? null, sortBy: filters.sortBy ?? "relevance" });
+  return result.ok ? { ok: true, value: result.value.searchPosts } : result;
 }
 
-export async function searchHashtags(query: string, limit = 20): Promise<GraphQLHashtagResult[] | null> {
-  const data = await graphqlRequest<{ searchHashtags: GraphQLHashtagResult[] }>(`
-    query SearchHashtags($query: String!, $limit: Int!) {
-      searchHashtags(query: $query, limit: $limit) { tag posts views }
+export async function searchHashtags(query: string, after: string | null = null, limit = 20): Promise<Result<GraphQLHashtagPage>> {
+  const result = await graphqlRequestResult<{ searchHashtags: GraphQLHashtagPage }>(`
+    query SearchHashtags($query: String!, $after: String, $limit: Int!) {
+      searchHashtags(query: $query, after: $after, limit: $limit) {
+        nextCursor
+        hashtags { tag posts views }
+      }
     }
-  `, { query, limit });
-  return data?.searchHashtags ?? null;
+  `, { query, after, limit });
+  return result.ok ? { ok: true, value: result.value.searchHashtags } : result;
 }
+
+export type GraphQLSearchSuggestion = { type: "creator" | "hashtag" | "query"; value: string; label: string };
+
+export async function fetchSearchSuggestions(prefix: string, limit = 8): Promise<GraphQLSearchSuggestion[] | null> {
+  const data = await graphqlRequest<{ searchSuggestions: GraphQLSearchSuggestion[] }>(`
+    query SearchSuggestions($prefix: String!, $limit: Int!) {
+      searchSuggestions(prefix: $prefix, limit: $limit) { type value label }
+    }
+  `, { prefix, limit });
+  return data?.searchSuggestions ?? null;
+}
+
+export type GraphQLSearchHistoryEntry = { query: string; createdAt: string };
+
+export async function fetchSearchHistory(limit = 10): Promise<GraphQLSearchHistoryEntry[] | null> {
+  const data = await graphqlRequest<{ searchHistory: GraphQLSearchHistoryEntry[] }>(`
+    query SearchHistory($limit: Int!) {
+      searchHistory(limit: $limit) { query createdAt }
+    }
+  `, { limit });
+  return data?.searchHistory ?? null;
+}
+
+export async function fetchTrendingSearches(limit = 8): Promise<string[] | null> {
+  const data = await graphqlRequest<{ trendingSearches: string[] }>(`
+    query TrendingSearches($limit: Int!) {
+      trendingSearches(limit: $limit)
+    }
+  `, { limit });
+  return data?.trendingSearches ?? null;
+}
+
+export async function recordSearch(query: string): Promise<boolean> {
+  const data = await graphqlRequest<{ recordSearch: boolean }>(`
+    mutation RecordSearch($query: String!) { recordSearch(query: $query) }
+  `, { query });
+  return data?.recordSearch ?? false;
+}
+
+export async function clearSearchHistoryRemote(): Promise<boolean> {
+  const data = await graphqlRequest<{ clearSearchHistory: boolean }>(`
+    mutation ClearSearchHistory { clearSearchHistory }
+  `);
+  return data?.clearSearchHistory ?? false;
+}
+
+export async function removeSearchHistoryEntryRemote(query: string): Promise<boolean> {
+  const data = await graphqlRequest<{ removeSearchHistoryEntry: boolean }>(`
+    mutation RemoveSearchHistoryEntry($query: String!) { removeSearchHistoryEntry(query: $query) }
+  `, { query });
+  return data?.removeSearchHistoryEntry ?? false;
+}
+
 
 export async function fetchTrendingSounds(genre?: string): Promise<GraphQLSound[] | null> {
   const data = await graphqlRequest<{ trendingSounds: GraphQLSound[] }>(`
@@ -449,15 +553,18 @@ export async function fetchProfileByUsername(username: string): Promise<GraphQLP
   return data?.profile ?? null;
 }
 
-export async function searchProfiles(query: string, limit = 20): Promise<GraphQLProfileSummary[] | null> {
-  const data = await graphqlRequest<{ searchProfiles: GraphQLProfileSummary[] }>(`
-    query SearchProfiles($query: String!, $limit: Int!) {
-      searchProfiles(query: $query, limit: $limit) {
-        ${profileSummaryFields}
+export async function searchProfiles(
+  query: string, after: string | null = null, limit = 20, filters: SearchProfileFilters = {},
+): Promise<Result<GraphQLProfilePage>> {
+  const result = await graphqlRequestResult<{ searchProfiles: GraphQLProfilePage }>(`
+    query SearchProfiles($query: String!, $after: String, $limit: Int!, $verifiedOnly: Boolean!, $openToCollab: Boolean) {
+      searchProfiles(query: $query, after: $after, limit: $limit, verifiedOnly: $verifiedOnly, openToCollab: $openToCollab) {
+        nextCursor
+        profiles { ${profileSummaryFields} }
       }
     }
-  `, { query, limit });
-  return data?.searchProfiles ?? null;
+  `, { query, after, limit, verifiedOnly: filters.verifiedOnly ?? false, openToCollab: filters.openToCollab ?? null });
+  return result.ok ? { ok: true, value: result.value.searchProfiles } : result;
 }
 
 export type UpdateProfilePatch = {

@@ -24,9 +24,9 @@ import { useTheme } from "./ThemeContext";
 import { ACCENT, EmptyState, useTokens } from "./settings-ui";
 import { ContentGrid, CreatorRow, SegmentedTabs, Thumb, formatCount } from "./profile-ui";
 import {
-  type HashtagResult, type SearchResults, EMPTY_RESULTS,
-  clearSearches, forgetSearch, recentSearches, rememberSearch, search,
-  totalResults, trendingHashtags,
+  type HashtagResult, type SearchFilters, type SearchResults, type Suggestion, EMPTY_RESULTS,
+  clearSearches, fetchSuggestions, forgetSearch, loadMoreCreators, loadMoreHashtags, loadMoreVideos,
+  recentSearches, rememberSearch, search, syncRecentSearches, totalResults, trendingHashtags, trendingSearches,
 } from "./search";
 import { type Sound } from "./TrendingSounds";
 import { fetchSuggestedProfiles } from "./profile-graphql";
@@ -35,8 +35,12 @@ import { noteFollowState } from "./follow-store";
 
 type Status = "idle" | "loading" | "ready" | "error";
 type Tab = "top" | "creators" | "videos" | "sounds" | "tags";
+type PostSort = "relevance" | "recent" | "popular";
 
 const DEBOUNCE_MS = 280;
+const SUGGEST_DEBOUNCE_MS = 150;
+const DEFAULT_FILTERS: SearchFilters = { sortBy: "relevance" };
+
 
 export function SearchScreen({
   onBack, onOpenProfile, onOpenPost, canOpenPost, onOpenSounds,
@@ -57,12 +61,19 @@ export function SearchScreen({
   const [error, setError] = useState("");
   const [tab, setTab] = useState<Tab>("top");
   const [recents, setRecents] = useState<string[]>(() => recentSearches());
+  const [filters, setFilters] = useState<SearchFilters>(DEFAULT_FILTERS);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
+  const [inputFocused, setInputFocused] = useState(false);
+  const [loadingMore, setLoadingMore] = useState<Partial<Record<"creators" | "videos" | "tags", boolean>>>({});
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   // Monotonic request id — only the newest response is allowed to land.
   const requestId = useRef(0);
 
-  const runSearch = useCallback(async (value: string) => {
+  // Server-side history (if signed in) folds into the local list once on mount.
+  useEffect(() => { void syncRecentSearches().then(setRecents); }, []);
+
+  const runSearch = useCallback(async (value: string, activeFilters: SearchFilters) => {
     const id = ++requestId.current;
     if (!value.trim()) {
       setStatus("idle");
@@ -71,7 +82,7 @@ export function SearchScreen({
     }
     setStatus("loading");
     setError("");
-    const result = await search(value);
+    const result = await search(value, activeFilters);
     if (id !== requestId.current) return; // A newer query is already in flight.
     if (!result.ok) { setError(result.error); setStatus("error"); return; }
     setResults(result.value);
@@ -80,21 +91,65 @@ export function SearchScreen({
 
   // Debounced: one request per pause, not one per keystroke.
   useEffect(() => {
-    const timer = setTimeout(() => { void runSearch(query); }, DEBOUNCE_MS);
+    const timer = setTimeout(() => { void runSearch(query, filters); }, DEBOUNCE_MS);
     return () => clearTimeout(timer);
-  }, [query, runSearch]);
+  }, [query, filters, runSearch]);
 
-  const submit = () => {
-    if (!query.trim()) return;
-    setRecents(rememberSearch(query));
-    void runSearch(query);
+  // A faster, separate debounce drives the autocomplete dropdown.
+  useEffect(() => {
+    if (!query.trim()) { setSuggestions([]); return; }
+    let active = true;
+    const timer = setTimeout(() => {
+      void fetchSuggestions(query).then((next) => { if (active) setSuggestions(next); });
+    }, SUGGEST_DEBOUNCE_MS);
+    return () => { active = false; clearTimeout(timer); };
+  }, [query]);
+
+  const submit = (value = query) => {
+    if (!value.trim()) return;
+    setQuery(value);
+    setRecents(rememberSearch(value));
+    setSuggestions([]);
+    inputRef.current?.blur();
+    void runSearch(value, filters);
   };
 
   const pick = (value: string) => {
     setQuery(value);
     setRecents(rememberSearch(value));
+    setSuggestions([]);
     setTab("top");
     inputRef.current?.focus();
+    void runSearch(value, filters);
+  };
+
+  const setSortBy = (sortBy: PostSort) => setFilters((f) => ({ ...f, sortBy }));
+  const toggleVerifiedOnly = () => setFilters((f) => ({ ...f, verifiedOnly: !f.verifiedOnly }));
+  const toggleOpenToCollab = () => setFilters((f) => ({ ...f, openToCollab: !f.openToCollab }));
+
+  const loadMore = async (kind: "creators" | "videos" | "tags") => {
+    if (loadingMore[kind]) return;
+    setLoadingMore((m) => ({ ...m, [kind]: true }));
+    try {
+      if (kind === "creators" && results.creatorsCursor) {
+        const more = await loadMoreCreators(query, results.creatorsCursor, filters);
+        if (more.ok) {
+          setResults((r) => ({ ...r, creators: [...r.creators, ...more.value.creators], creatorsCursor: more.value.nextCursor }));
+        }
+      } else if (kind === "videos" && results.videosCursor) {
+        const more = await loadMoreVideos(query, results.videosCursor, filters);
+        if (more.ok) {
+          setResults((r) => ({ ...r, videos: [...r.videos, ...more.value.videos], videosCursor: more.value.nextCursor }));
+        }
+      } else if (kind === "tags" && results.hashtagsCursor) {
+        const more = await loadMoreHashtags(query, results.hashtagsCursor);
+        if (more.ok) {
+          setResults((r) => ({ ...r, hashtags: [...r.hashtags, ...more.value.hashtags], hashtagsCursor: more.value.nextCursor }));
+        }
+      }
+    } finally {
+      setLoadingMore((m) => ({ ...m, [kind]: false }));
+    }
   };
 
   const counts = useMemo(() => ({
@@ -113,10 +168,13 @@ export function SearchScreen({
     { id: "tags", label: "Tags", count: counts.tags },
   ];
 
+  const showSuggestions = inputFocused && query.trim().length > 0 && suggestions.length > 0;
+
+
   return (
     <div className="absolute inset-0 z-20 flex flex-col" style={{ background: t.bg }}>
       {/* ── Search bar ── */}
-      <div className="flex items-center gap-3 px-4 pt-14 pb-3 flex-shrink-0"
+      <div className="relative flex items-center gap-3 px-4 pt-14 pb-3 flex-shrink-0"
         style={{ borderBottom: `1px solid ${t.divider}` }}>
         <button onClick={onBack} aria-label="Back"
           className="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0 active:opacity-70"
@@ -131,6 +189,8 @@ export function SearchScreen({
             value={query}
             onChange={(e) => { setQuery(e.target.value); setTab("top"); }}
             onKeyDown={(e) => { if (e.key === "Enter") submit(); }}
+            onFocus={() => setInputFocused(true)}
+            onBlur={() => setTimeout(() => setInputFocused(false), 120)}
             placeholder="Search creators, posts, sounds"
             aria-label="Search creators, posts and sounds"
             autoFocus
@@ -138,7 +198,7 @@ export function SearchScreen({
             style={{ color: t.heading }}
           />
           {query && (
-            <button onClick={() => { setQuery(""); setStatus("idle"); setResults(EMPTY_RESULTS); inputRef.current?.focus(); }}
+            <button onClick={() => { setQuery(""); setStatus("idle"); setResults(EMPTY_RESULTS); setSuggestions([]); inputRef.current?.focus(); }}
               aria-label="Clear search"
               className="w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0"
               style={{ background: t.chipBg }}>
@@ -146,11 +206,45 @@ export function SearchScreen({
             </button>
           )}
         </div>
+
+        {/* ── Autocomplete ── */}
+        {showSuggestions && (
+          <div className="absolute left-4 right-4 top-full mt-1 rounded-2xl overflow-hidden z-30"
+            style={{ background: t.cardBg, border: t.cardBorder, boxShadow: "0 12px 30px rgba(0,0,0,0.25)" }}>
+            {suggestions.map((s, i) => (
+              <button key={`${s.type}-${s.value}-${i}`} onMouseDown={(e) => e.preventDefault()}
+                onClick={() => submit(s.value)}
+                className="w-full flex items-center gap-3 px-4 py-2.5 text-left active:opacity-70"
+                style={i > 0 ? { borderTop: `1px solid ${t.divider}` } : undefined}>
+                {s.type === "creator" ? <Users className="w-3.5 h-3.5 flex-shrink-0" style={{ color: ACCENT }} />
+                  : s.type === "hashtag" ? <Hash className="w-3.5 h-3.5 flex-shrink-0" style={{ color: ACCENT }} />
+                    : <Clock className="w-3.5 h-3.5 flex-shrink-0" style={{ color: t.sub }} />}
+                <span className="flex-1 truncate text-[14px]" style={{ color: t.body }}>{s.label}</span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* ── Result tabs ── only meaningful once something has been searched ── */}
       {status === "ready" && counts.top > 0 && (
         <SegmentedTabs tabs={tabs} active={tab} onChange={setTab} layoutId="search-tabs" />
+      )}
+
+      {/* ── Filters ── contextual to the active tab ── */}
+      {status === "ready" && counts.top > 0 && (tab === "creators" || tab === "videos") && (
+        <div className="flex items-center gap-2 px-4 py-2 flex-shrink-0 overflow-x-auto" style={{ scrollbarWidth: "none" }}>
+          {tab === "videos" && (["relevance", "recent", "popular"] as PostSort[]).map((option) => (
+            <FilterChip key={option} t={t} active={filters.sortBy === option} onClick={() => setSortBy(option)}
+              label={option === "relevance" ? "Relevance" : option === "recent" ? "Recent" : "Popular"} />
+          ))}
+          {tab === "creators" && (
+            <>
+              <FilterChip t={t} active={!!filters.verifiedOnly} onClick={toggleVerifiedOnly} label="Verified" />
+              <FilterChip t={t} active={!!filters.openToCollab} onClick={toggleOpenToCollab} label="Open to collab" />
+            </>
+          )}
+        </div>
       )}
 
       <div className="flex-1 overflow-y-auto pb-12" style={{ scrollbarWidth: "none" }}>
@@ -176,7 +270,7 @@ export function SearchScreen({
             </div>
             <p className="font-bold text-[16px]" style={{ color: t.heading }}>Search didn't go through</p>
             <p className="text-[13px] mt-1.5 leading-relaxed max-w-[270px]" style={{ color: t.sub }}>{error}</p>
-            <button onClick={() => void runSearch(query)}
+            <button onClick={() => void runSearch(query, filters)}
               className="mt-5 px-5 py-2.5 rounded-full text-[13px] font-bold text-white flex items-center gap-2"
               style={{ background: `linear-gradient(135deg,${ACCENT},#0077cc)`, boxShadow: "0 6px 18px rgba(0,174,239,0.35)" }}>
               <RefreshCw className="w-3.5 h-3.5" /> Try again
@@ -202,6 +296,9 @@ export function SearchScreen({
                 {(tab === "top" ? results.creators.slice(0, 3) : results.creators).map((creator, i, list) => (
                   <CreatorRow key={creator.id} creator={creator} onOpen={onOpenProfile} last={i === list.length - 1} />
                 ))}
+                {tab === "creators" && results.creatorsCursor && (
+                  <LoadMoreButton t={t} loading={!!loadingMore.creators} onClick={() => void loadMore("creators")} />
+                )}
               </Section>
             )}
 
@@ -215,6 +312,9 @@ export function SearchScreen({
                     canOpen={canOpenPost}
                   />
                 </div>
+                {tab === "videos" && results.videosCursor && (
+                  <LoadMoreButton t={t} loading={!!loadingMore.videos} onClick={() => void loadMore("videos")} />
+                )}
               </Section>
             )}
 
@@ -232,6 +332,9 @@ export function SearchScreen({
                 {(tab === "top" ? results.hashtags.slice(0, 3) : results.hashtags).map((hashtag) => (
                   <HashtagRow key={hashtag.tag} hashtag={hashtag} t={t} onOpen={() => pick(hashtag.tag)} />
                 ))}
+                {tab === "tags" && results.hashtagsCursor && (
+                  <LoadMoreButton t={t} loading={!!loadingMore.tags} onClick={() => void loadMore("tags")} />
+                )}
               </Section>
             )}
           </>
@@ -269,6 +372,8 @@ function DiscoverPanel({
   }, []);
   const suggestions = remoteSuggestions ?? [];
   const tags = useMemo(() => trendingHashtags(), []);
+  const [trendingQueries, setTrendingQueries] = useState<string[]>([]);
+  useEffect(() => { void trendingSearches(8).then(setTrendingQueries); }, []);
 
   return (
     <div className="pt-2">
@@ -286,6 +391,20 @@ function DiscoverPanel({
               </button>
             </div>
           ))}
+        </Section>
+      )}
+
+      {trendingQueries.length > 0 && (
+        <Section title="Trending searches" icon={<TrendingUp className="w-3.5 h-3.5" />} t={t}>
+          <div className="flex flex-wrap gap-2 px-5 pt-1">
+            {trendingQueries.map((value) => (
+              <button key={value} onClick={() => onPick(value)}
+                className="px-3.5 py-2 rounded-full text-[13px] font-semibold"
+                style={{ background: t.chipBg, border: t.chipBorder, color: t.body }}>
+                {value}
+              </button>
+            ))}
+          </div>
         </Section>
       )}
 
@@ -363,6 +482,37 @@ function HashtagRow({ hashtag, t, onOpen }: { hashtag: HashtagResult; t: ReturnT
         </span>
       </span>
     </motion.button>
+  );
+}
+
+// ─── FILTERS / PAGINATION ────────────────────────────────────────────────────
+
+function FilterChip({
+  t, label, active, onClick,
+}: { t: ReturnType<typeof useTokens>; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button onClick={onClick}
+      className="px-3.5 py-1.5 rounded-full text-[12px] font-semibold flex-shrink-0 whitespace-nowrap"
+      style={active
+        ? { background: `linear-gradient(135deg,${ACCENT},#0077cc)`, color: "#fff" }
+        : { background: t.chipBg, border: t.chipBorder, color: t.body }}>
+      {label}
+    </button>
+  );
+}
+
+function LoadMoreButton({
+  t, loading, onClick,
+}: { t: ReturnType<typeof useTokens>; loading: boolean; onClick: () => void }) {
+  return (
+    <div className="px-5 pt-2">
+      <button onClick={onClick} disabled={loading}
+        className="w-full py-2.5 rounded-full text-[13px] font-bold flex items-center justify-center gap-2 disabled:opacity-60"
+        style={{ background: t.chipBg, border: t.chipBorder, color: t.body }}>
+        {loading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : null}
+        {loading ? "Loading…" : "Load more"}
+      </button>
+    </div>
   );
 }
 

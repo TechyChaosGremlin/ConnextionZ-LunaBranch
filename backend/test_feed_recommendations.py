@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from backend.app.main import Query
@@ -255,6 +255,41 @@ class FeedRecommendationTests(unittest.TestCase):
                 engine.dispose()
 
             self.assertEqual(page.items[0].id, str(eligible_id))
+
+    def test_feed_cursor_does_not_repeat_items_after_new_top_post(self) -> None:
+        with TemporaryDirectory() as directory:
+            engine = create_engine(f"sqlite:///{Path(directory) / 'feed.db'}")
+            Base.metadata.create_all(engine)
+            with Session(engine) as session:
+                creator = User(email="creator@example.test")
+                session.add(creator)
+                session.flush()
+                profile = Profile(user_id=creator.id, username="creator", display_name="Creator")
+                session.add_all([
+                    Post(profile=profile, thumbnail="/top.jpg", likes=30),
+                    Post(profile=profile, thumbnail="/middle.jpg", likes=20),
+                    Post(profile=profile, thumbnail="/bottom.jpg", likes=10),
+                ])
+                session.commit()
+
+            def get_test_session() -> Session:
+                return Session(engine)
+
+            info = SimpleNamespace(context={"user_id": None})
+            try:
+                with patch("backend.app.main.get_session", side_effect=get_test_session):
+                    first_page = Query().feed(info, limit=2)
+                    with Session(engine) as session:
+                        profile = session.scalar(select(Profile).where(Profile.username == "creator"))
+                        session.add(Post(profile=profile, thumbnail="/new-top.jpg", likes=50))
+                        session.commit()
+                    second_page = Query().feed(info, cursor=first_page.next_cursor, limit=2)
+            finally:
+                engine.dispose()
+
+            first_page_ids = {item.id for item in first_page.items}
+            self.assertEqual(len(first_page_ids & {item.id for item in second_page.items}), 0)
+            self.assertEqual([item.thumbnail for item in second_page.items], ["/bottom.jpg"])
 
 
 if __name__ == "__main__":
