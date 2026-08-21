@@ -7,9 +7,10 @@ import re
 import logging
 import time
 import math
+from collections.abc import Sequence
 from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Literal, Optional, cast as type_cast
 
 import strawberry
 from graphql import GraphQLError
@@ -19,9 +20,11 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from sqlalchemy import Float, String, and_, case, cast, delete, desc, func, or_, select, update
+from sqlalchemy import Float, String, and_, case, cast as sql_cast, delete, desc, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import aliased, selectinload
+from sqlalchemy.sql.elements import ColumnElement
+from starlette.responses import Response
 from strawberry.fastapi import GraphQLRouter
 from strawberry.types import Info
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -29,25 +32,25 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.middleware import SlowAPIMiddleware
 from slowapi.util import get_remote_address
 
-from backend.app.auth import delete_user_account, get_user_profile, AuthContext
-from backend.app.auth_routes import create_auth_router
-from backend.app.database import get_session, run_migrations
-from backend.app.models import Comment as DbComment, CommentLike, CommentReport, Follow, Media as DbMedia, Notification, Playlist as DbPlaylist, Post as DbPost, PostLike, PostReport, PostSave, PostShare, PostWatch, Profile as DbProfile, SearchQuery, Sound as DbSound, User, UserBlock, UserMute
-from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
-from backend.app.media_routes import create_media_router
-from backend.app.profile_validation import (
+from app.auth import delete_user_account, get_user_profile, AuthContext
+from app.auth_routes import create_auth_router
+from app.database import get_session, run_migrations
+from app.models import Comment as DbComment, CommentLike, CommentReport, Follow, Media as DbMedia, Notification, Playlist as DbPlaylist, Post as DbPost, PostLike, PostReport, PostSave, PostShare, PostWatch, Profile as DbProfile, SearchQuery, Sound as DbSound, User, UserBlock, UserMute
+from app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
+from app.media_routes import create_media_router
+from app.profile_validation import (
     validate_avatar_url,
     validate_bio,
     validate_display_name,
     validate_username,
     validate_website,
 )
-from backend.app.graphql_types import (
+from app.graphql_types import (
     Comment, CommentLikeResult, CommentPage, ContentItem, FeedItem, FeedPage, FollowResult, HashtagPage, HashtagResult, LikeResult,
     Playlist, PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SaveResult, SearchHistoryEntry,
     SearchSuggestion, ShareResult, WatchResult, SoundResult, UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
 )
-from backend.app.seed import seed_database
+from app.seed import seed_database  # type: ignore[reportMissingImports]
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
@@ -227,7 +230,7 @@ def post_to_graphql(
     )
 
 
-def liked_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[int]:
+def liked_post_ids(session, viewer_id: int | None, posts: Sequence[DbPost]) -> set[int]:
     if viewer_id is None or not posts:
         return set()
     return set(session.scalars(
@@ -238,7 +241,7 @@ def liked_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[i
     ).all())
 
 
-def saved_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[int]:
+def saved_post_ids(session, viewer_id: int | None, posts: Sequence[DbPost]) -> set[int]:
     if viewer_id is None or not posts:
         return set()
     return set(session.scalars(
@@ -249,7 +252,7 @@ def saved_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[i
     ).all())
 
 
-def shared_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[int]:
+def shared_post_ids(session, viewer_id: int | None, posts: Sequence[DbPost]) -> set[int]:
     if viewer_id is None or not posts:
         return set()
     return set(session.scalars(
@@ -330,7 +333,7 @@ def feed_ranking_score(
 
 
 def rank_feed_rows(
-    rows: list[tuple[DbPost, DbProfile]],
+    rows: Sequence[tuple[DbPost, DbProfile]],
     viewer_id: int | None,
     followed_user_ids: set[int],
     watched_creator_scores: dict[int, float],
@@ -491,22 +494,23 @@ def refresh_comment_count(session, post_id: int) -> int:
 
 def add_interaction_notification(
     session,
-    recipient_id: int,
+    recipient_id: int | None,
     actor_id: int,
     notification_type: str,
     text: str,
     post_id: int | None = None,
     comment_id: int | None = None,
 ) -> None:
-    if recipient_id != actor_id:
-        session.add(Notification(
-            recipient_id=recipient_id,
-            actor_id=actor_id,
-            type=notification_type,
-            post_id=post_id,
-            comment_id=comment_id,
-            text=text,
-        ))
+    if recipient_id is None or recipient_id == actor_id:
+        return
+    session.add(Notification(
+        recipient_id=recipient_id,
+        actor_id=actor_id,
+        type=notification_type,
+        post_id=post_id,
+        comment_id=comment_id,
+        text=text,
+    ))
 
 
 def find_profile(session, identifier: str) -> DbProfile | None:
@@ -545,7 +549,7 @@ def can_view_profile(session, viewer_id: int | None, profile: DbProfile) -> bool
 
 
 def profile_visibility_filter(viewer_id: int | None):
-    visibility = [DbProfile.private_account.is_(False)]
+    visibility: list[ColumnElement[bool]] = [DbProfile.private_account.is_(False)]
     if viewer_id is not None:
         visibility.append(DbProfile.user_id == viewer_id)
         visibility.append(
@@ -777,7 +781,7 @@ class Query:
         rank_score = (
             case((DbPost.caption.ilike(prefix_pattern), 30), else_=0)
             + case((DbPost.caption.ilike(contains_pattern), 15), else_=0)
-            + case((cast(DbPost.hashtags, String).ilike(contains_pattern), 25), else_=0)
+            + case((sql_cast(DbPost.hashtags, String).ilike(contains_pattern), 25), else_=0)
             + case((DbPost.audio.ilike(contains_pattern), 10), else_=0)
             + case((or_(
                 DbProfile.username.ilike(contains_pattern),
@@ -791,7 +795,7 @@ class Query:
                 filters.append(or_(
                     DbPost.caption.ilike(pattern),
                     DbPost.audio.ilike(pattern),
-                    cast(DbPost.hashtags, String).ilike(pattern),
+                    sql_cast(DbPost.hashtags, String).ilike(pattern),
                     DbProfile.username.ilike(pattern),
                     DbProfile.display_name.ilike(pattern),
                 ))
@@ -802,7 +806,7 @@ class Query:
                 .where(visible_post_filter(viewer_id))
             )
             if hashtag:
-                statement = statement.where(cast(DbPost.hashtags, String).ilike(f"%{hashtag.strip().lstrip('#')}%"))
+                statement = statement.where(sql_cast(DbPost.hashtags, String).ilike(f"%{hashtag.strip().lstrip('#')}%"))
             if sort_by == "recent":
                 statement = statement.order_by(DbPost.created_at.desc(), DbPost.id.desc())
             elif sort_by == "popular":
@@ -1349,10 +1353,11 @@ class Query:
                 .where(feed_filter)
             ).all()
             if following:
-                rows.sort(key=lambda row: (row[0].id,), reverse=True)
+                rows = sorted(rows, key=lambda row: (row[0].id,), reverse=True)
                 if cursor_post_id is not None:
                     rows = [row for row in rows if row[0].id < cursor_post_id]
             else:
+                rows = [(row[0], row[1]) for row in rows]
                 rows = rank_feed_rows(
                     rows, viewer_id, followed_user_ids, watched_creator_scores,
                     interest_hashtags, interest_audio, viewer_username, viewer_open_to_collab, ranking_now,
@@ -2127,7 +2132,13 @@ limiter = Limiter(
     enabled=rate_limit_enabled,
 )
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+
+def rate_limit_exception_handler(request: Request, exc: RateLimitExceeded) -> Response:
+    return _rate_limit_exceeded_handler(request, exc)
+
+
+app.add_exception_handler(RateLimitExceeded, rate_limit_exception_handler)  # type: ignore[arg-type]
 
 environment = os.getenv("ENVIRONMENT", "development").lower()
 session_secret = os.getenv("SESSION_SECRET")
@@ -2137,8 +2148,14 @@ if not session_secret:
     session_secret = "local-development-session-secret"
 
 session_cookie_secure = os.getenv("SESSION_COOKIE_SECURE", "false").lower() in {"1", "true", "yes"}
-session_same_site = os.getenv("SESSION_COOKIE_SAMESITE", "lax").lower()
-if session_same_site not in {"lax", "strict", "none"}:
+session_same_site_raw = os.getenv("SESSION_COOKIE_SAMESITE", "lax").lower()
+if session_same_site_raw == "lax":
+    session_same_site: Literal["lax", "strict", "none"] = "lax"
+elif session_same_site_raw == "strict":
+    session_same_site = "strict"
+elif session_same_site_raw == "none":
+    session_same_site = "none"
+else:
     raise RuntimeError("SESSION_COOKIE_SAMESITE must be lax, strict, or none")
 if session_same_site == "none" and not session_cookie_secure:
     raise RuntimeError("SESSION_COOKIE_SECURE must be true when SESSION_COOKIE_SAMESITE is none")

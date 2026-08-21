@@ -1,8 +1,8 @@
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 
-from backend.app.database import get_session
-from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_TYPES, store_upload
-from backend.app.models import Media
+from app.database import get_session
+from app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_TYPES, store_upload
+from app.models import Media
 
 
 def create_media_router(limiter) -> APIRouter:

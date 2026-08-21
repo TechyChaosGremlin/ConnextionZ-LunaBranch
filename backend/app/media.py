@@ -6,7 +6,7 @@ from pathlib import Path
 
 from fastapi import HTTPException, UploadFile
 
-from backend.app.storage import MediaStorage
+from app.storage import MediaStorage
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MEDIA_ROOT = Path(os.getenv("MEDIA_ROOT", str(PROJECT_ROOT / "media")))

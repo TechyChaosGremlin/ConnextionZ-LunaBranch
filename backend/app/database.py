@@ -6,7 +6,7 @@ from pathlib import Path
 from sqlalchemy import create_engine, event, inspect
 from sqlalchemy.orm import Session
 
-from backend.app.models import Base
+from app.models import Base
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATABASE_PATH = PROJECT_ROOT / "profiles.db"

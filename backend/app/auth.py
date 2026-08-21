@@ -6,10 +6,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import Session
 
-from backend.app.database import get_session
-from backend.app.media import media_storage
-from backend.app.models import Media, User, Profile
-from backend.app.profile_validation import validate_display_name, validate_username
+from app.database import get_session
+from app.media import media_storage
+from app.models import Media, User, Profile
+from app.profile_validation import validate_display_name, validate_username
 
 
 class AuthContext:

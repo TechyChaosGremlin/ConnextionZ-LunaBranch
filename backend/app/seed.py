@@ -3,8 +3,8 @@ from __future__ import annotations
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from backend.app.database import engine
-from backend.app.models import Post, Playlist, Profile, User
+from app.database import engine
+from app.models import Post, Playlist, Profile, User
 
 
 def seed_database() -> None:

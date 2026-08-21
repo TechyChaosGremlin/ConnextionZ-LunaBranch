@@ -1,6 +1,6 @@
 from fastapi import APIRouter, HTTPException, Request
 
-from backend.app.auth import authenticate_user, delete_user_account, get_user_profile, register_user
+from app.auth import authenticate_user, delete_user_account, get_user_profile, register_user
 
 
 def create_auth_router(limiter) -> APIRouter:
