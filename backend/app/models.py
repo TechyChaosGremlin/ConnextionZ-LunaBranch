@@ -67,6 +67,32 @@ class Follow(Base):
     )
 
 
+class UserBlock(Base):
+    __tablename__ = "user_blocks"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    blocker_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    blocked_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("blocker_id", "blocked_id", name="uq_user_blocks_pair"),
+    )
+
+
+class UserMute(Base):
+    __tablename__ = "user_mutes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    muter_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    muted_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("muter_id", "muted_id", name="uq_user_mutes_pair"),
+    )
+
+
 class Media(Base):
     __tablename__ = "media"
 
@@ -84,6 +110,7 @@ class Post(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
     profile_id: Mapped[int] = mapped_column(ForeignKey("profiles.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
 
     thumbnail: Mapped[str] = mapped_column(String(500), nullable=False)
     media_url: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -103,6 +130,7 @@ class Post(Base):
     saves: Mapped[int] = mapped_column(Integer, default=0)
     collab_with: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="published")
+    moderation_status: Mapped[str] = mapped_column(String(20), default="approved", nullable=False, index=True)
     scheduled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True, index=True)
 
     profile: Mapped[Profile] = relationship(back_populates="posts")
@@ -144,6 +172,55 @@ class PostShare(Base):
 
     __table_args__ = (
         UniqueConstraint("post_id", "user_id", name="uq_post_shares_pair"),
+    )
+
+
+class PostWatch(Base):
+    __tablename__ = "post_watches"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    watched_seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    completed: Mapped[bool] = mapped_column(Boolean, default=False)
+    rewatched: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class PostReport(Base):
+    __tablename__ = "post_reports"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    reporter_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("post_id", "reporter_id", name="uq_post_reports_pair"),
+    )
+
+
+class Comment(Base):
+    __tablename__ = "comments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("posts.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    likes: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)
+
+
+class CommentLike(Base):
+    __tablename__ = "comment_likes"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True)
+    comment_id: Mapped[int] = mapped_column(ForeignKey("comments.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("comment_id", "user_id", name="uq_comment_likes_pair"),
     )
 
 

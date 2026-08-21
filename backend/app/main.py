@@ -4,7 +4,8 @@ import os
 import re
 import logging
 import time
-from datetime import datetime, timezone
+import math
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -16,9 +17,9 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.httpsredirect import HTTPSRedirectMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
-from sqlalchemy import String, and_, cast, desc, func, or_, select, update
+from sqlalchemy import Float, String, and_, case, cast, desc, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import aliased, selectinload
 from strawberry.fastapi import GraphQLRouter
 from strawberry.types import Info
 from slowapi import Limiter, _rate_limit_exceeded_handler
@@ -29,7 +30,7 @@ from slowapi.util import get_remote_address
 from backend.app.auth import delete_user_account, get_user_profile, AuthContext
 from backend.app.auth_routes import create_auth_router
 from backend.app.database import get_session, run_migrations
-from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, PostLike, PostSave, PostShare, Profile as DbProfile, Sound as DbSound, User
+from backend.app.models import Comment as DbComment, CommentLike, Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, PostLike, PostReport, PostSave, PostShare, PostWatch, Profile as DbProfile, Sound as DbSound, User, UserBlock, UserMute
 from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
 from backend.app.media_routes import create_media_router
 from backend.app.profile_validation import (
@@ -40,8 +41,8 @@ from backend.app.profile_validation import (
     validate_website,
 )
 from backend.app.graphql_types import (
-    ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, LikeResult, Playlist,
-    PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SaveResult, ShareResult,
+    Comment, CommentLikeResult, ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, LikeResult, Playlist,
+    PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SaveResult, ShareResult, WatchResult,
     SoundResult, UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
 )
 from backend.app.seed import seed_database
@@ -238,6 +239,52 @@ def shared_post_ids(session, viewer_id: int | None, posts: list[DbPost]) -> set[
     ).all())
 
 
+def rank_feed_rows(
+    rows: list[tuple[DbPost, DbProfile]],
+    viewer_id: int | None,
+    followed_user_ids: set[int],
+    watched_creator_scores: dict[int, float],
+    interest_hashtags: set[str],
+    interest_audio: set[str],
+    viewer_username: str | None,
+    viewer_open_to_collab: bool,
+) -> list[tuple[DbPost, DbProfile]]:
+    now = datetime.utcnow()
+
+    def score(row: tuple[DbPost, DbProfile]) -> float:
+        post, profile = row
+        views = max(post.views or 0, 0)
+        engagement = (
+            (post.likes or 0) * 3
+            + (post.comments or 0) * 4
+            + (post.shares or 0) * 6
+            + (post.saves or 0) * 5
+        ) / (views + 100)
+        age_hours = max((now - post.created_at).total_seconds() / 3600, 0)
+        freshness = max(0.0, 1.0 - age_hours / (24 * 30))
+        hashtags = {str(tag).lower().lstrip("#") for tag in (post.hashtags or [])}
+        interest_match = len(hashtags & interest_hashtags)
+        audio_match = 1.0 if post.audio and post.audio.lower() in interest_audio else 0.0
+        followed_creator = profile.user_id in followed_user_ids
+        collab_match = bool(viewer_open_to_collab and post.allow_collabs and profile.open_to_collab)
+        if post.allow_collabs and profile.open_to_collab and viewer_username and post.collab_with:
+            collab_match = collab_match or viewer_username.lower() in post.collab_with.lower()
+
+        return (
+            engagement * 100
+            + math.log1p(views) * 2
+            + freshness * 10
+            + (30 if followed_creator else 0)
+            + interest_match * 8
+            + audio_match * 4
+            + watched_creator_scores.get(profile.id, 0.0) * 2
+            + (6 if collab_match else 0)
+            + (profile.collab_score or 0) * 0.5
+        )
+
+    return sorted(rows, key=lambda row: (score(row), row[0].id), reverse=True)
+
+
 def profile_to_graphql(
     profile: DbProfile,
     is_following: bool = False,
@@ -349,6 +396,18 @@ def profile_summary(profile: DbProfile, is_following: bool = False) -> ProfileSu
     )
 
 
+def comment_to_graphql(comment: DbComment, author: DbProfile, viewer_id: int | None = None, liked: bool = False) -> Comment:
+    return Comment(
+        id=str(comment.id),
+        text=comment.text,
+        likes=comment.likes or 0,
+        is_liked=liked,
+        can_delete=viewer_id == comment.user_id,
+        created_at=comment.created_at.isoformat() + "Z",
+        author=profile_summary(author),
+    )
+
+
 def find_profile(session, identifier: str) -> DbProfile | None:
     identifier = identifier.strip()
     profile = session.execute(
@@ -437,9 +496,13 @@ def feed_item(
 
 def visible_post_filter(viewer_id: int | None):
     """Build the SQL predicate for posts the viewer is allowed to see."""
+    publishable = and_(
+        or_(DbPost.status == "published", and_(DbPost.status == "scheduled", DbPost.scheduled_at <= datetime.utcnow())),
+        DbPost.moderation_status == "approved",
+    )
     if viewer_id is None:
         return and_(
-            or_(DbPost.status == "published", and_(DbPost.status == "scheduled", DbPost.scheduled_at <= datetime.utcnow())),
+            publishable,
             DbPost.visibility == "public",
             DbProfile.private_account.is_(False),
         )
@@ -449,8 +512,29 @@ def visible_post_filter(viewer_id: int | None):
         Follow.following_id == DbProfile.user_id,
     ).exists()
 
+    viewer_has_blocked_author = select(UserBlock.id).where(
+        UserBlock.blocker_id == viewer_id,
+        UserBlock.blocked_id == DbProfile.user_id,
+    ).exists()
+    author_has_blocked_viewer = select(UserBlock.id).where(
+        UserBlock.blocker_id == DbProfile.user_id,
+        UserBlock.blocked_id == viewer_id,
+    ).exists()
+    viewer_has_muted_author = select(UserMute.id).where(
+        UserMute.muter_id == viewer_id,
+        UserMute.muted_id == DbProfile.user_id,
+    ).exists()
+    viewer_reported_post = select(PostReport.id).where(
+        PostReport.reporter_id == viewer_id,
+        PostReport.post_id == DbPost.id,
+    ).exists()
+
     return and_(
-        or_(DbPost.status == "published", and_(DbPost.status == "scheduled", DbPost.scheduled_at <= datetime.utcnow())),
+        publishable,
+        ~viewer_has_blocked_author,
+        ~author_has_blocked_viewer,
+        ~viewer_has_muted_author,
+        ~viewer_reported_post,
         or_(
             and_(DbPost.visibility == "public", DbProfile.private_account.is_(False)),
             and_(DbPost.visibility == "public", DbProfile.user_id == viewer_id),
@@ -851,6 +935,41 @@ class Query:
             )
 
     @strawberry.field
+    def comments(self, post_id: strawberry.ID, info: Info, limit: int = 50) -> list[Comment]:
+        """Return newest comments for a post the viewer can access."""
+        post_id_value = parse_int_id(post_id, "Post ID")
+        page_size = max(1, min(limit, 100))
+        viewer_id = info.context.get("user_id")
+        with get_session() as session:
+            post = session.execute(
+                select(DbPost, DbProfile)
+                .join(DbProfile, DbPost.profile_id == DbProfile.id)
+                .where(DbPost.id == post_id_value, visible_post_filter(viewer_id))
+            ).first()
+            if post is None or not post[0].allow_comments:
+                return []
+
+            rows = session.execute(
+                select(DbComment, DbProfile)
+                .join(DbProfile, DbComment.user_id == DbProfile.user_id)
+                .where(DbComment.post_id == post_id_value)
+                .order_by(DbComment.created_at.desc(), DbComment.id.desc())
+                .limit(page_size)
+            ).all()
+            liked_ids = set()
+            if viewer_id is not None and rows:
+                liked_ids = set(session.scalars(
+                    select(CommentLike.comment_id).where(
+                        CommentLike.user_id == viewer_id,
+                        CommentLike.comment_id.in_([comment.id for comment, _ in rows]),
+                    )
+                ).all())
+            return [
+                comment_to_graphql(comment, author, viewer_id, comment.id in liked_ids)
+                for comment, author in rows
+            ]
+
+    @strawberry.field
     def feed(self, info: Info, cursor: str | None = None, limit: int = 10, following: bool = False) -> FeedPage:
         page_size = max(1, min(limit, 50))
         viewer_id = info.context.get("user_id")
@@ -874,26 +993,50 @@ class Query:
                         Follow.following_id == DbProfile.user_id,
                     ).exists(),
                 )
-            recommendation_score = (
-                DbPost.likes * 3
-                + DbPost.comments * 2
-                + DbPost.shares * 5
-                + DbPost.saves * 4
-                + DbPost.views / 100
-                + DbProfile.collab_score * 10
-            )
-            feed_order = (
-                (DbPost.id.desc(),) if following
-                else (desc(recommendation_score), DbPost.id.desc())
-            )
+            followed_user_ids = set()
+            watched_creator_scores = {}
+            interest_hashtags = set()
+            interest_audio = set()
+            viewer_username = None
+            viewer_open_to_collab = False
+            if viewer_id is not None:
+                followed_user_ids = set(session.scalars(select(Follow.following_id).where(Follow.follower_id == viewer_id)).all())
+                viewer_profile = session.scalar(select(DbProfile).where(DbProfile.user_id == viewer_id))
+                if viewer_profile:
+                    viewer_username = viewer_profile.username
+                    viewer_open_to_collab = viewer_profile.open_to_collab
+                watched_rows = session.execute(
+                    select(PostWatch, DbPost)
+                    .join(DbPost, PostWatch.post_id == DbPost.id)
+                    .where(PostWatch.user_id == viewer_id)
+                ).all()
+                for watch, watched_post in watched_rows:
+                    watched_creator_scores[watched_post.profile_id] = watched_creator_scores.get(watched_post.profile_id, 0.0) + (
+                        3.0 if watch.completed else 1.5 if watch.rewatched else 0.5
+                    )
+                    interest_hashtags.update(str(tag).lower().lstrip("#") for tag in (watched_post.hashtags or []))
+                    if watched_post.audio:
+                        interest_audio.add(watched_post.audio.lower())
+                interacted_post_ids = set(session.scalars(select(PostLike.post_id).where(PostLike.user_id == viewer_id)).all())
+                interacted_post_ids.update(session.scalars(select(PostSave.post_id).where(PostSave.user_id == viewer_id)).all())
+                if interacted_post_ids:
+                    for post in session.scalars(select(DbPost).where(DbPost.id.in_(interacted_post_ids))).all():
+                        interest_hashtags.update(str(tag).lower().lstrip("#") for tag in (post.hashtags or []))
+                        if post.audio:
+                            interest_audio.add(post.audio.lower())
             rows = session.execute(
                 select(DbPost, DbProfile)
                 .join(DbProfile, DbPost.profile_id == DbProfile.id)
                 .where(feed_filter)
-                .order_by(*feed_order)
-                .offset(offset)
-                .limit(page_size + 1)
             ).all()
+            if following:
+                rows.sort(key=lambda row: (row[0].id,), reverse=True)
+            else:
+                rows = rank_feed_rows(
+                    rows, viewer_id, followed_user_ids, watched_creator_scores,
+                    interest_hashtags, interest_audio, viewer_username, viewer_open_to_collab,
+                )
+            rows = rows[offset:offset + page_size + 1]
             has_more = len(rows) > page_size
             rows = rows[:page_size]
             liked_ids = liked_post_ids(session, viewer_id, [post for post, _ in rows])
@@ -999,6 +1142,94 @@ class Mutation:
             session.commit()
             session.refresh(profile)
             return profile_to_graphql(profile)
+
+    @strawberry.mutation(name="addComment")
+    def add_comment(self, post_id: strawberry.ID, text: str, info: Info) -> Comment:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to comment", "UNAUTHENTICATED", 401)
+        body = text.strip()
+        if not body or len(body) > 500:
+            raise api_error("Comment must be between 1 and 500 characters", "VALIDATION_ERROR", 400)
+
+        post_id_value = parse_int_id(post_id, "Post ID")
+        with get_session() as session:
+            row = session.execute(
+                select(DbPost, DbProfile)
+                .join(DbProfile, DbPost.profile_id == DbProfile.id)
+                .where(DbPost.id == post_id_value, visible_post_filter(user_id))
+            ).first()
+            if row is None:
+                raise api_error("Post not found", "NOT_FOUND", 404)
+            post, _ = row
+            if not post.allow_comments:
+                raise api_error("Comments are disabled for this post", "FORBIDDEN", 403)
+
+            comment = DbComment(post_id=post_id_value, user_id=user_id, text=body)
+            session.add(comment)
+            post.comments = (post.comments or 0) + 1
+            session.commit()
+            session.refresh(comment)
+            author = session.execute(select(DbProfile).where(DbProfile.user_id == user_id)).scalar_one()
+            return comment_to_graphql(comment, author, user_id)
+
+    @strawberry.mutation(name="deleteComment")
+    def delete_comment(self, id: strawberry.ID, info: Info) -> bool:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to delete a comment", "UNAUTHENTICATED", 401)
+        comment_id = parse_int_id(id, "Comment ID")
+        with get_session() as session:
+            comment = session.execute(
+                select(DbComment).where(DbComment.id == comment_id, DbComment.user_id == user_id)
+            ).scalar_one_or_none()
+            if comment is None:
+                raise api_error("Comment not found", "NOT_FOUND", 404)
+            post = session.execute(select(DbPost).where(DbPost.id == comment.post_id)).scalar_one_or_none()
+            session.delete(comment)
+            if post is not None:
+                post.comments = max(0, (post.comments or 0) - 1)
+            session.commit()
+            return True
+
+    @strawberry.mutation(name="likeComment")
+    def like_comment(self, id: strawberry.ID, info: Info) -> CommentLikeResult:
+        return self._set_comment_like(id, info, True)
+
+    @strawberry.mutation(name="unlikeComment")
+    def unlike_comment(self, id: strawberry.ID, info: Info) -> CommentLikeResult:
+        return self._set_comment_like(id, info, False)
+
+    def _set_comment_like(self, id: strawberry.ID, info: Info, liked: bool) -> CommentLikeResult:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to like a comment", "UNAUTHENTICATED", 401)
+        comment_id = parse_int_id(id, "Comment ID")
+        with get_session() as session:
+            comment = session.execute(select(DbComment).where(DbComment.id == comment_id)).scalar_one_or_none()
+            if comment is None:
+                raise api_error("Comment not found", "NOT_FOUND", 404)
+            visible = session.execute(
+                select(DbComment.id)
+                .join(DbPost, DbComment.post_id == DbPost.id)
+                .join(DbProfile, DbPost.profile_id == DbProfile.id)
+                .where(DbComment.id == comment_id, visible_post_filter(user_id))
+            ).scalar_one_or_none()
+            if visible is None:
+                raise api_error("Comment not found", "NOT_FOUND", 404)
+            existing = session.execute(
+                select(CommentLike).where(CommentLike.comment_id == comment_id, CommentLike.user_id == user_id)
+            ).scalar_one_or_none()
+            if liked and existing is None:
+                session.add(CommentLike(comment_id=comment_id, user_id=user_id))
+            elif not liked and existing is not None:
+                session.delete(existing)
+            session.flush()
+            comment.likes = session.scalar(
+                select(func.count(CommentLike.id)).where(CommentLike.comment_id == comment_id)
+            ) or 0
+            session.commit()
+            return CommentLikeResult(liked=liked, likes=comment.likes)
 
     @strawberry.mutation(name="likePost")
     def like_post(self, id: strawberry.ID, info: Info) -> LikeResult:
@@ -1167,6 +1398,55 @@ class Mutation:
             session.commit()
             session.refresh(post)
             return ShareResult(shares=current_count, shared=False)
+
+    @strawberry.mutation(name="trackPostWatch")
+    def track_post_watch(
+        self,
+        post_id: strawberry.ID,
+        watched_seconds: float,
+        info: Info,
+        completed: bool = False,
+        rewatched: bool = False,
+    ) -> WatchResult:
+        user_id = info.context.get("user_id")
+        if user_id is None:
+            raise api_error("Must be logged in to track a post watch", "UNAUTHENTICATED", 401)
+        if not math.isfinite(watched_seconds) or watched_seconds < 0:
+            raise api_error("Watched seconds must be a non-negative number", "VALIDATION_ERROR", 400)
+
+        parsed_post_id = parse_int_id(post_id, "Post ID")
+        with get_session() as session:
+            post = session.execute(
+                select(DbPost)
+                .join(DbProfile, DbPost.profile_id == DbProfile.id)
+                .where(DbPost.id == parsed_post_id, visible_post_filter(user_id))
+            ).scalar_one_or_none()
+            if post is None:
+                raise api_error("Post not found", "NOT_FOUND", 404)
+
+            has_prior_watch = session.execute(
+                select(PostWatch.id).where(
+                    PostWatch.post_id == parsed_post_id,
+                    PostWatch.user_id == user_id,
+                ).limit(1)
+            ).first() is not None
+            session.add(PostWatch(
+                post_id=parsed_post_id,
+                user_id=user_id,
+                watched_seconds=watched_seconds,
+                completed=completed,
+                rewatched=rewatched or has_prior_watch,
+            ))
+            if not has_prior_watch:
+                post.views += 1
+            session.commit()
+            session.refresh(post)
+            return WatchResult(
+                views=post.views,
+                watched_seconds=watched_seconds,
+                completed=completed,
+                rewatched=rewatched or has_prior_watch,
+            )
 
     @strawberry.mutation
     def follow(self, username: str, info: Info) -> FollowResult:

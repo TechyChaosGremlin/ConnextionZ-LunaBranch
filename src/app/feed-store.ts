@@ -58,6 +58,7 @@ export async function fetchFeedPage(cursor: string | null, following = false): P
           hashtags: post.hashtags ?? [],
           audio: post.audio ?? "Original Sound",
           mediaUrl: post.mediaUrl ?? undefined,
+          durationSec: post.durationSec ?? undefined,
           isLiked: post.isLiked ?? false,
           isSaved: post.isSaved ?? false,
           isShared: post.isShared ?? false,

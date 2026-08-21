@@ -58,6 +58,7 @@ export interface FeedVideo extends ContentItem {
   saves: number;
   /** An uploaded video file, when the post has one — image-only posts have none. */
   mediaUrl?: string;
+  durationSec?: number;
   /** Whether the signed-in viewer has already liked this post. */
   isLiked?: boolean;
   /** Whether the signed-in viewer has already saved this post. */

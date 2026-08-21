@@ -8,6 +8,7 @@ import { InboxScreen } from "./Inbox";
 import { ThemeContext, useTheme } from "./ThemeContext";
 import { creatorById, type FeedVideo } from "./creators";
 import { useFeed } from "./feed-store";
+import { addComment, deleteComment, fetchComments, likeComment, type GraphQLComment, trackPostWatch, unlikeComment } from "./profile-graphql";
 import { activateFollowGraph } from "./follow-store";
 import { activateLikeGraph, useLike } from "./like-store";
 import { activateSaveGraph, useSave } from "./save-store";
@@ -16,7 +17,7 @@ import { motion, AnimatePresence } from "motion/react";
 import {
   Heart, MessageCircle, Bookmark, Music,
   Home, Search, Plus, Mail, User, X, Send, Check,
-  ChevronUp, ChevronDown, Navigation,
+  ChevronUp, ChevronDown, Navigation, Trash2,
 } from "lucide-react";
 
 // ─── FEED ADAPTER ────────────────────────────────────────────────────────────
@@ -104,38 +105,9 @@ interface Comment {
   text: string;
   likes: number;
   time: string;
+  isLiked?: boolean;
+  canDelete?: boolean;
 }
-
-const SEED_COMMENTS: Record<string, Comment[]> = {
-  "1": [
-    { id: "c1", username: "beatsby.kai", avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=60&h=60&fit=crop&auto=format", text: "This is everything 🔥 the vibe is immaculate", likes: 842, time: "2h" },
-    { id: "c2", username: "sxundcloud", avatarUrl: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=60&h=60&fit=crop&auto=format", text: "Waiting for that Friday drop like 👀", likes: 391, time: "3h" },
-    { id: "c3", username: "lofi.luna", avatarUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=60&h=60&fit=crop&auto=format", text: "Late night sessions really do hit diff, no notes", likes: 217, time: "5h" },
-    { id: "c4", username: "prod.gio", avatarUrl: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=60&h=60&fit=crop&auto=format", text: "Send me the stems I beg 😭", likes: 188, time: "6h" },
-  ],
-  "2": [
-    { id: "c1", username: "lens.ivy", avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=60&h=60&fit=crop&auto=format", text: "The golden hour did NOT miss today omg", likes: 1204, time: "1h" },
-    { id: "c2", username: "raw.remi", avatarUrl: "https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=60&h=60&fit=crop&auto=format", text: "What camera settings were you on?? 👁️", likes: 562, time: "2h" },
-    { id: "c3", username: "aperture.ax", avatarUrl: "https://images.unsplash.com/photo-1527980965255-d3b416303d12?w=60&h=60&fit=crop&auto=format", text: "Frame within a frame 🎯 this is art", likes: 344, time: "4h" },
-  ],
-  "3": [
-    { id: "c1", username: "drop.dani", avatarUrl: "https://images.unsplash.com/photo-1531746020798-e6953c6e8e04?w=60&h=60&fit=crop&auto=format", text: "2:14 destroyed me completely I am not okay", likes: 3821, time: "30m" },
-    { id: "c2", username: "subwoofer.sz", avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=60&h=60&fit=crop&auto=format", text: "My neighbours officially hate me because of this 😅", likes: 2109, time: "45m" },
-    { id: "c3", username: "rave.rx", avatarUrl: "https://images.unsplash.com/photo-1544005313-94ddf0286df2?w=60&h=60&fit=crop&auto=format", text: "Actually life changing as promised", likes: 987, time: "1h" },
-    { id: "c4", username: "freq.faye", avatarUrl: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=60&h=60&fit=crop&auto=format", text: "Set this as my alarm and I've never been more awake", likes: 741, time: "2h" },
-  ],
-  "4": [
-    { id: "c1", username: "devmo.rei", avatarUrl: "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=60&h=60&fit=crop&auto=format", text: "No sleep + caffeine is literally the startup founder starter pack 😂", likes: 512, time: "1h" },
-    { id: "c2", username: "build.bex", avatarUrl: "https://images.unsplash.com/photo-1506794778202-cad84cf45f1d?w=60&h=60&fit=crop&auto=format", text: "What stack? I need the full tutorial NOW", likes: 430, time: "2h" },
-    { id: "c3", username: "ship.syd", avatarUrl: "https://images.unsplash.com/photo-1527980965255-d3b416303d12?w=60&h=60&fit=crop&auto=format", text: "Real builders ship. Respect 🫡", likes: 298, time: "3h" },
-  ],
-  "5": [
-    { id: "c1", username: "film.fee", avatarUrl: "https://images.unsplash.com/photo-1524504388940-b1c1722653e1?w=60&h=60&fit=crop&auto=format", text: "People really underestimate lighting and it shows", likes: 891, time: "1h" },
-    { id: "c2", username: "cine.cam", avatarUrl: "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=60&h=60&fit=crop&auto=format", text: "What camera is this? I'm genuinely shocked", likes: 654, time: "2h" },
-    { id: "c3", username: "grade.gus", avatarUrl: "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=60&h=60&fit=crop&auto=format", text: "The color grade alone 🤌 chef's kiss", likes: 420, time: "3h" },
-    { id: "c4", username: "reel.rin", avatarUrl: "https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=60&h=60&fit=crop&auto=format", text: "Tutorial please! I'll sub twice if I have to", likes: 311, time: "4h" },
-  ],
-};
 
 const fmt = (n: number) =>
   n >= 1_000_000 ? (n / 1_000_000).toFixed(1) + "M"
@@ -269,23 +241,73 @@ function CollabButton({ onTap }: { onTap: () => void }) {
 
 // ─── COMMENT SHEET ───────────────────────────────────────────────────────────
 
+const commentTime = (createdAt: string) => {
+  const minutes = Math.max(1, Math.floor((Date.now() - new Date(createdAt).getTime()) / 60_000));
+  return minutes < 60 ? `${minutes}m` : minutes < 1_440 ? `${Math.floor(minutes / 60)}h` : `${Math.floor(minutes / 1_440)}d`;
+};
+
+const toComment = (comment: GraphQLComment): Comment => ({
+  id: comment.id,
+  username: comment.author.username,
+  avatarUrl: comment.author.avatarUrl ?? "",
+  text: comment.text,
+  likes: comment.likes,
+  time: commentTime(comment.createdAt),
+  isLiked: comment.isLiked,
+  canDelete: comment.canDelete,
+});
+
 function CommentSheet({
-  video, comments, onAddComment, onClose,
+  video, onClose,
 }: {
-  video: DisplayVideo; comments: Comment[];
-  onAddComment: (text: string) => void; onClose: () => void;
+  video: DisplayVideo; onClose: () => void;
 }) {
   const isDark = useTheme();
   const [text, setText] = useState("");
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
-  const submit = () => {
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError("");
+    void fetchComments(video.id).then((result) => {
+      if (!active) return;
+      if (!result.ok) { setError(result.error); setLoading(false); return; }
+      setComments(result.value.map(toComment));
+      setLoading(false);
+    });
+    return () => { active = false; };
+  }, [video.id]);
+
+  const submit = async () => {
     const t = text.trim();
-    if (!t) return;
-    onAddComment(t);
+    if (!t || submitting) return;
+    setSubmitting(true);
+    const result = await addComment(video.id, t);
+    if (!result.ok) { setError(result.error); setSubmitting(false); return; }
+    setComments((previous) => [...previous, toComment(result.value)]);
     setText("");
+    setSubmitting(false);
     setTimeout(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, 50);
+  };
+
+  const remove = async (id: string) => {
+    const result = await deleteComment(id);
+    if (!result.ok) { setError(result.error); return; }
+    setComments((previous) => previous.filter((comment) => comment.id !== id));
+  };
+
+  const toggleLike = async (comment: Comment) => {
+    const result = comment.isLiked ? await unlikeComment(comment.id) : await likeComment(comment.id);
+    if (!result.ok) { setError(result.error); return; }
+    setComments((previous) => previous.map((item) => item.id === comment.id
+      ? { ...item, likes: result.value.likes, isLiked: result.value.liked }
+      : item));
   };
 
   const D = {
@@ -312,25 +334,28 @@ function CommentSheet({
       </div>
       <div className="flex items-center justify-between px-5 pb-3 flex-shrink-0" style={{ borderBottom: `1px solid ${D.divider}` }}>
         <span className="font-bold text-[15px]" style={{ color: D.heading }}>
-          {fmt(video.comments + comments.filter(c => c.id.startsWith("u")).length)} comments
+          {fmt(comments.length)} comments
         </span>
         <button onClick={onClose} className="w-7 h-7 rounded-full flex items-center justify-center" style={{ background: D.xBg }}>
           <X className="w-3.5 h-3.5" style={{ color: D.xIcon }} />
         </button>
       </div>
       <div ref={listRef} className="flex-1 overflow-y-auto px-4 py-3 space-y-5">
-        {comments.map((c) => <CommentRow key={c.id} comment={c} />)}
+        {loading ? <p className="text-center text-sm" style={{ color: D.xIcon }}>Loading comments…</p>
+          : comments.length === 0 ? <p className="text-center text-sm" style={{ color: D.xIcon }}>Be the first to comment.</p>
+          : comments.map((c) => <CommentRow key={c.id} comment={c} onDelete={remove} onLike={toggleLike} />)}
       </div>
+      {error && <p className="px-4 pb-2 text-[12px]" style={{ color: "#f87171" }} role="alert">{error}</p>}
       <div className="flex-shrink-0 flex items-center gap-3 px-4 py-3" style={{ borderTop: `1px solid ${D.divider}` }}>
         <div className="w-8 h-8 rounded-full flex-shrink-0 flex items-center justify-center text-white text-xs font-bold" style={{ background: "linear-gradient(135deg,#00AEEF,#0077cc)" }}>Y</div>
         <input
           ref={inputRef} value={text} onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void submit(); } }}
           placeholder="Add a comment…" autoFocus
           className="flex-1 bg-transparent text-sm outline-none"
           style={{ color: D.inputColor }}
         />
-        <motion.button whileTap={{ scale: 0.88 }} onClick={submit} style={{ opacity: text.trim() ? 1 : 0.3 }}>
+        <motion.button whileTap={{ scale: 0.88 }} onClick={() => void submit()} disabled={submitting} style={{ opacity: text.trim() && !submitting ? 1 : 0.3 }}>
           <Send className="w-5 h-5" style={{ color: "#00AEEF" }} />
         </motion.button>
       </div>
@@ -338,9 +363,12 @@ function CommentSheet({
   );
 }
 
-function CommentRow({ comment }: { comment: Comment }) {
+function CommentRow({ comment, onDelete, onLike }: {
+  comment: Comment;
+  onDelete: (id: string) => void;
+  onLike: (comment: Comment) => void;
+}) {
   const isDark = useTheme();
-  const [liked, setLiked] = useState(false);
   const text1 = isDark ? "#fff" : "#0a0e1a";
   const text2 = isDark ? "rgba(255,255,255,0.35)" : "rgba(10,14,26,0.4)";
   const text3 = isDark ? "rgba(255,255,255,0.85)" : "rgba(10,14,26,0.75)";
@@ -354,11 +382,18 @@ function CommentRow({ comment }: { comment: Comment }) {
           <span className="text-[11px]" style={{ color: text2 }}>{comment.time}</span>
         </div>
         <p className="text-[13px] leading-snug mt-0.5" style={{ color: text3 }}>{comment.text}</p>
-        <button className="text-[11px] mt-1 font-medium" style={{ color: text2 }}>Reply</button>
+        <div className="flex items-center gap-3 mt-1">
+          <button className="text-[11px] font-medium" style={{ color: text2 }}>Reply</button>
+          {comment.canDelete && (
+            <button onClick={() => void onDelete(comment.id)} aria-label="Delete comment" title="Delete comment">
+              <Trash2 className="w-3.5 h-3.5" style={{ color: text2 }} />
+            </button>
+          )}
+        </div>
       </div>
-      <button onClick={() => setLiked((l) => !l)} className="flex flex-col items-center gap-0.5 flex-shrink-0 pt-0.5">
-        <Heart className={`w-4 h-4 ${liked ? "fill-red-500 text-red-500" : ""}`} style={{ color: liked ? undefined : text4 }} />
-        <span className="text-[10px]" style={{ color: text4 }}>{fmt(comment.likes + (liked ? 1 : 0))}</span>
+      <button onClick={() => void onLike(comment)} className="flex flex-col items-center gap-0.5 flex-shrink-0 pt-0.5" aria-label={comment.isLiked ? "Unlike comment" : "Like comment"}>
+        <Heart className={`w-4 h-4 ${comment.isLiked ? "fill-red-500 text-red-500" : ""}`} style={{ color: comment.isLiked ? undefined : text4 }} />
+        <span className="text-[10px]" style={{ color: text4 }}>{fmt(comment.likes)}</span>
       </button>
     </div>
   );
@@ -756,9 +791,9 @@ export default function App() {
   const [collabTarget, setCollabTarget] = useState<DisplayVideo | null>(null);
   const [commentTarget, setCommentTarget] = useState<DisplayVideo | null>(null);
   const [shareTarget, setShareTarget] = useState<DisplayVideo | null>(null);
-  const [userComments, setUserComments] = useState<Record<string, Comment[]>>({});
   const [paused, setPaused] = useState(false);
   const touchStartY = useRef(0);
+  const pausedRef = useRef(paused);
 
   const { items: feedItems, status: feedStatus, error: feedError, loadMore, reachedEnd, reload } = useFeed(feedTab === "following");
 
@@ -774,6 +809,23 @@ export default function App() {
   const displayItems = useMemo(() => feedItems.map(toDisplayVideo), [feedItems]);
   const feed = displayItems;
   const video = feed[Math.min(idx, feed.length - 1)];
+
+  useEffect(() => { pausedRef.current = paused; }, [paused]);
+
+  useEffect(() => {
+    if (!video) return;
+    const watch = { seconds: 0, lastTick: Date.now() };
+    const timer = window.setInterval(() => {
+      const now = Date.now();
+      if (!pausedRef.current) watch.seconds += (now - watch.lastTick) / 1000;
+      watch.lastTick = now;
+    }, 1000);
+    return () => {
+      window.clearInterval(timer);
+      const duration = video.durationSec ?? 0;
+      void trackPostWatch(video.id, watch.seconds, duration > 0 && watch.seconds >= duration);
+    };
+  }, [video?.id]);
 
   const likeState = useLike(video?.id ?? "", video?.isLiked ?? false, video?.likes ?? 0);
   const saveState = useSave(video?.id ?? "", video?.isSaved ?? false, video?.saves ?? 0);
@@ -1017,12 +1069,7 @@ export default function App() {
                 <motion.div key="comment-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
                   className="absolute inset-0 z-40" style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}
                   onClick={() => setCommentTarget(null)} />
-                <CommentSheet key="comment-sheet" video={commentTarget} comments={userComments[commentTarget.id] ?? SEED_COMMENTS[commentTarget.id] ?? []}
-                  onAddComment={(text) => setUserComments((prev) => ({
-                    ...prev,
-                    [commentTarget.id]: [...(prev[commentTarget.id] ?? SEED_COMMENTS[commentTarget.id] ?? []), { id: `u${Date.now()}`, username: "you", avatarUrl: "", text, likes: 0, time: "now" }],
-                  }))}
-                  onClose={() => setCommentTarget(null)} />
+                <CommentSheet key="comment-sheet" video={commentTarget} onClose={() => setCommentTarget(null)} />
               </>
             )}
           </AnimatePresence>

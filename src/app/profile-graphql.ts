@@ -55,6 +55,16 @@ export type GraphQLFeedItem = GraphQLPost & {
   creator: GraphQLProfileSummary;
 };
 
+export type GraphQLComment = {
+  id: string;
+  text: string;
+  likes: number;
+  isLiked: boolean;
+  canDelete: boolean;
+  createdAt: string;
+  author: GraphQLProfileSummary;
+};
+
 export type GraphQLHashtagResult = {
   tag: string;
   posts: number;
@@ -171,6 +181,76 @@ export async function fetchFeedPageFromApi(cursor: string | null, limit = 10, fo
     }
   `, { cursor, limit, following });
   return data?.feed ?? null;
+}
+
+export type GraphQLWatchResult = {
+  views: number;
+  watchedSeconds: number;
+  completed: boolean;
+  rewatched: boolean;
+};
+
+export async function trackPostWatch(
+  postId: string,
+  watchedSeconds: number,
+  completed: boolean,
+): Promise<Result<GraphQLWatchResult>> {
+  return graphqlRequestResult<{ trackPostWatch: GraphQLWatchResult }>(`
+    mutation TrackPostWatch($postId: ID!, $watchedSeconds: Float!, $completed: Boolean!) {
+      trackPostWatch(postId: $postId, watchedSeconds: $watchedSeconds, completed: $completed) {
+        views watchedSeconds completed rewatched
+      }
+    }
+  `, { postId, watchedSeconds, completed }).then((result) => (
+    result.ok ? { ok: true, value: result.value.trackPostWatch } : result
+  ));
+}
+
+export async function fetchComments(postId: string, limit = 100): Promise<Result<GraphQLComment[]>> {
+  const result = await graphqlRequestResult<{ comments: GraphQLComment[] }>(`
+    query Comments($postId: ID!, $limit: Int!) {
+      comments(postId: $postId, limit: $limit) {
+        id text likes isLiked canDelete createdAt
+        author { id username displayName avatarUrl avatarColor }
+      }
+    }
+  `, { postId, limit });
+  return result.ok ? { ok: true, value: result.value.comments } : result;
+}
+
+export async function addComment(postId: string, text: string): Promise<Result<GraphQLComment>> {
+  const result = await graphqlRequestResult<{ addComment: GraphQLComment }>(`
+    mutation AddComment($postId: ID!, $text: String!) {
+      addComment(postId: $postId, text: $text) {
+        id text likes isLiked canDelete createdAt
+        author { id username displayName avatarUrl avatarColor }
+      }
+    }
+  `, { postId, text });
+  return result.ok ? { ok: true, value: result.value.addComment } : result;
+}
+
+export async function deleteComment(id: string): Promise<Result<boolean>> {
+  const result = await graphqlRequestResult<{ deleteComment: boolean }>(`
+    mutation DeleteComment($id: ID!) { deleteComment(id: $id) }
+  `, { id });
+  return result.ok ? { ok: true, value: result.value.deleteComment } : result;
+}
+
+export type GraphQLCommentLikeResult = { liked: boolean; likes: number };
+
+export async function likeComment(id: string): Promise<Result<GraphQLCommentLikeResult>> {
+  const result = await graphqlRequestResult<{ likeComment: GraphQLCommentLikeResult }>(`
+    mutation LikeComment($id: ID!) { likeComment(id: $id) { liked likes } }
+  `, { id });
+  return result.ok ? { ok: true, value: result.value.likeComment } : result;
+}
+
+export async function unlikeComment(id: string): Promise<Result<GraphQLCommentLikeResult>> {
+  const result = await graphqlRequestResult<{ unlikeComment: GraphQLCommentLikeResult }>(`
+    mutation UnlikeComment($id: ID!) { unlikeComment(id: $id) { liked likes } }
+  `, { id });
+  return result.ok ? { ok: true, value: result.value.unlikeComment } : result;
 }
 
 export async function searchPosts(query: string, limit = 20): Promise<GraphQLFeedItem[] | null> {

@@ -47,6 +47,14 @@ class ShareResult:
 
 
 @strawberry.type
+class WatchResult:
+    views: int
+    watched_seconds: float = strawberry.field(name="watchedSeconds")
+    completed: bool
+    rewatched: bool
+
+
+@strawberry.type
 class Playlist:
     id: str
     title: str
@@ -70,6 +78,23 @@ class ProfileSummary:
     open_to_collab: bool = strawberry.field(name="openToCollab", default=True)
     private_account: bool = strawberry.field(name="privateAccount", default=False)
     is_following: bool = strawberry.field(name="isFollowing", default=False)
+
+
+@strawberry.type
+class Comment:
+    id: str
+    text: str
+    likes: int = 0
+    is_liked: bool = strawberry.field(name="isLiked", default=False)
+    can_delete: bool = strawberry.field(name="canDelete", default=False)
+    created_at: str = strawberry.field(name="createdAt")
+    author: ProfileSummary
+
+
+@strawberry.type
+class CommentLikeResult:
+    liked: bool
+    likes: int
 
 
 @strawberry.type
