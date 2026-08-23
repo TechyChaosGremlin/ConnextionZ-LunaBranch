@@ -1,0 +1,144 @@
+"""
+Collaboration repository for database operations.
+
+Provides CRUD operations for Collaboration, CollaborationParticipant, and Milestone models.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import datetime, timezone
+from typing import Optional, list
+
+from sqlalchemy import select, and_, or_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.models.collaboration import (
+    Collaboration, CollaborationParticipant, Milestone,
+    CollaborationStatus, MilestoneStatus,
+)
+from repositories.base import BaseRepository
+
+
+class CollaborationRepository(BaseRepository[Collaboration]):
+    """Repository for Collaboration model database operations.
+
+    Extends BaseRepository with common CRUD operations and adds
+    collaboration-specific methods for marketplace, participants, and milestones.
+    """
+
+    def __init__(self, db: AsyncSession):
+        """Initialize with database session."""
+        super().__init__(db, Collaboration)
+
+    async def get_for_user(
+        self,
+        user_id: uuid.UUID,
+        status: Optional[CollaborationStatus] = None,
+        limit: int = 20,
+        before_id: Optional[uuid.UUID] = None,
+    ) -> list[Collaboration]:
+        """Get collaborations where user is initiator or participant."""
+        # Subquery to find collaboration IDs where user is a participant
+        participant_collab_ids = select(CollaborationParticipant.collaboration_id).where(
+            CollaborationParticipant.user_id == user_id
+        ).subquery()
+
+        stmt = select(Collaboration).where(
+            or_(
+                Collaboration.initiator_id == user_id,
+                Collaboration.id.in_(participant_collab_ids),
+            )
+        )
+        if status:
+            stmt = stmt.where(Collaboration.status == status)
+        if before_id:
+            stmt = stmt.where(Collaboration.id < before_id)
+        stmt = stmt.order_by(Collaboration.created_at.desc()).limit(limit)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    async def get_marketplace(
+        self,
+        tags: Optional[list[str]] = None,
+        content_type: Optional[str] = None,
+        limit: int = 20,
+        before_id: Optional[uuid.UUID] = None,
+    ) -> list[Collaboration]:
+        """Get public collaboration marketplace listings."""
+        stmt = select(Collaboration).where(
+            Collaboration.status == CollaborationStatus.PROPOSED
+        )
+        if content_type:
+            stmt = stmt.where(Collaboration.content_type == content_type)
+        if tags:
+            # Filter by tags (JSONB contains any of the provided tags)
+            for tag in tags:
+                stmt = stmt.where(Collaboration.tags.contains([tag]))
+        if before_id:
+            stmt = stmt.where(Collaboration.id < before_id)
+        stmt = stmt.order_by(Collaboration.created_at.desc()).limit(limit)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
+    # --- Participant Methods ---
+
+    async def add_participant(
+        self, participant: CollaborationParticipant
+    ) -> CollaborationParticipant:
+        """Add a participant to a collaboration."""
+        self.db.add(participant)
+        await self.db.flush()
+        await self.db.refresh(participant)
+        return participant
+
+    async def remove_participant(
+        self, participant: CollaborationParticipant
+    ) -> None:
+        """Remove a participant from a collaboration."""
+        await self.db.delete(participant)
+        await self.db.flush()
+
+    async def get_participant(
+        self, collab_id: uuid.UUID, user_id: uuid.UUID
+    ) -> Optional[CollaborationParticipant]:
+        """Get a specific participant in a collaboration."""
+        result = await self.db.execute(
+            select(CollaborationParticipant).where(
+                CollaborationParticipant.collaboration_id == collab_id,
+                CollaborationParticipant.user_id == user_id,
+            )
+        )
+        return result.scalar_one_or_none()
+
+    async def update_participant(
+        self, participant: CollaborationParticipant
+    ) -> CollaborationParticipant:
+        """Update a collaboration participant."""
+        await self.db.flush()
+        await self.db.refresh(participant)
+        return participant
+
+    # --- Milestone Methods ---
+
+    async def add_milestone(self, milestone: Milestone) -> Milestone:
+        """Add a milestone to a collaboration."""
+        self.db.add(milestone)
+        await self.db.flush()
+        await self.db.refresh(milestone)
+        return milestone
+
+    async def get_milestones(self, collab_id: uuid.UUID) -> list[Milestone]:
+        """Get all milestones for a collaboration."""
+        result = await self.db.execute(
+            select(Milestone)
+            .where(Milestone.collaboration_id == collab_id)
+            .order_by(Milestone.sort_order)
+        )
+        return list(result.scalars().all())
+
+    async def update_milestone(self, milestone: Milestone) -> Milestone:
+        """Update a milestone."""
+        await self.db.flush()
+        await self.db.refresh(milestone)
+        return milestone

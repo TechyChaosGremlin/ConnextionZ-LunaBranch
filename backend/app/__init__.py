@@ -1,1 +1,1 @@
-"""ConnextionZ profile backend package."""
+# ConnextionZ Platform — Application package

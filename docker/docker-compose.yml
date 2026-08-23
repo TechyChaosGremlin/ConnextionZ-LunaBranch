@@ -1,0 +1,184 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database with pgvector extension
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: connextionz-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-password}
+      POSTGRES_DB: ${POSTGRES_DB:-connextionz}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - connextionz-network
+
+  # Redis for caching and sessions
+  redis:
+    image: redis:7.4-alpine
+    container_name: connextionz-redis
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD:-redis_password}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--raw", "incr", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - connextionz-network
+
+  # RabbitMQ for message queue
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: connextionz-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-guest}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-guest}
+      RABBITMQ_DEFAULT_VHOST: /
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - connextionz-network
+
+  # LocalStack for AWS service emulation
+  localstack:
+    image: localstack/localstack:3.4
+    container_name: connextionz-localstack
+    environment:
+      - SERVICES=s3,sqs,sns,lambda,iam,cloudwatch
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+      - PORT_WEB_UI=8080
+      - LAMBDA_EXECUTOR=local
+      - KINESIS_ERROR_PROBABILITY=0
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-test}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-test}
+      - AWS_DEFAULT_REGION=${AWS_REGION:-us-east-1}
+    ports:
+      - "4566:4566"
+      - "8080:8080"
+    volumes:
+      - "${LOCALSTACK_VOLUME_DIR:-./docker/volumes/localstack}:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    networks:
+      - connextionz-network
+
+  # Backend (FastAPI) - Development
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+      target: development
+    container_name: connextionz-backend
+    environment:
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD:-password}@postgres:5432/${POSTGRES_DB:-connextionz}
+      - REDIS_URL=redis://:${REDIS_PASSWORD:-redis_password}@redis:6379/0
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-guest}:${RABBITMQ_PASSWORD:-guest}@rabbitmq:5672/
+      - AWS_ENDPOINT_URL=http://localstack:4566
+      - JWT_SECRET_KEY=${JWT_SECRET_KEY:-dev-jwt-secret-change-in-production}
+      - NODE_ENV=development
+      - DEBUG=True
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      - ..:/app
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      localstack:
+        condition: service_started
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    networks:
+      - connextionz-network
+    restart: unless-stopped
+
+  # Frontend (React) - Development
+  frontend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.frontend
+      target: development
+    container_name: connextionz-frontend
+    environment:
+      - REACT_APP_API_URL=http://localhost:${BACKEND_PORT:-8000}
+      - REACT_APP_WS_URL=ws://localhost:${BACKEND_PORT:-8000}/ws
+      - CHOKIDAR_USEPOLLING=true
+    ports:
+      - "${PORT:-3000}:3000"
+    volumes:
+      - ..:/app
+      - /app/node_modules
+      - /app/build
+    depends_on:
+      - backend
+    command: npm start
+    networks:
+      - connextionz-network
+    restart: unless-stopped
+
+  # Adminer for database management
+  adminer:
+    image: adminer:4.8.1
+    container_name: connextionz-adminer
+    ports:
+      - "8081:8080"
+    environment:
+      - ADMINER_DEFAULT_SERVER=postgres
+    depends_on:
+      - postgres
+    networks:
+      - connextionz-network
+
+  # Redis Commander for Redis management
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: connextionz-redis-commander
+    environment:
+      - REDIS_HOSTS=local:redis:6379:0:${REDIS_PASSWORD:-redis_password}
+      - HTTP_USER=${REDIS_COMMANDER_HTTP_USER:-admin}
+      - HTTP_PASSWORD=${REDIS_COMMANDER_HTTP_PASSWORD:-admin}
+    ports:
+      - "8082:8081"
+    depends_on:
+      - redis
+    networks:
+      - connextionz-network
+
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  rabbitmq_data:
+    driver: local
+
+networks:
+  connextionz-network:
+    driver: bridge

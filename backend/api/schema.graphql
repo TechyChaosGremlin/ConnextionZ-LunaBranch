@@ -1,0 +1,1236 @@
+# ============================================================================
+# ConnextionZ Platform — GraphQL Schema (SDL)
+# ============================================================================
+# Canonical API contract. All 14 SRS features represented.
+# Served at: POST /api/graphql  |  GraphiQL: GET /api/graphql
+# ============================================================================
+
+# ── Custom Scalars ──────────────────────────────────────────────────────────
+
+scalar UUID
+scalar DateTime
+scalar JSON
+
+# ── Enums ───────────────────────────────────────────────────────────────────
+
+enum UserRole {
+  ADMIN
+  CREATOR
+  USER
+  GUEST
+}
+
+enum AccountStatus {
+  ACTIVE
+  SUSPENDED
+  BANNED
+  PENDING_VERIFICATION
+}
+
+enum ContentType {
+  POST
+  VIDEO
+  IMAGE
+  AUDIO
+  LIVE_STREAM
+}
+
+enum ContentStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+  FLAGGED
+  REMOVED
+}
+
+enum CollaborationStatus {
+  PROPOSED
+  ACCEPTED
+  DECLINED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum MilestoneStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  DISPUTED
+}
+
+enum NotificationType {
+  COLLABORATION_INVITE
+  COLLABORATION_ACCEPTED
+  COLLABORATION_COMPLETED
+  NEW_FOLLOWER
+  NEW_COMMENT
+  NEW_LIKE
+  MENTION
+  MESSAGE
+  BADGE_EARNED
+  ENDORSEMENT_RECEIVED
+  MILESTONE_COMPLETED
+  SYSTEM
+}
+
+enum NotificationChannel {
+  IN_APP
+  PUSH
+  EMAIL
+}
+
+enum ReportTargetType {
+  POST
+  COMMENT
+  USER
+  MESSAGE
+}
+
+enum ReportStatus {
+  PENDING
+  REVIEWING
+  RESOLVED
+  DISMISSED
+}
+
+enum SortDirection {
+  ASC
+  DESC
+}
+
+enum FeedAlgorithm {
+  PERSONALIZED
+  TRENDING
+  RECENT
+  FOLLOWING
+}
+
+# ── Pagination (Relay Connection Spec) ───────────────────────────────────────
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+# ── Core Types ──────────────────────────────────────────────────────────────
+
+# ---- User & Profile (Features: Auth, Profiles) ----
+
+type User {
+  id: UUID!
+  email: String!
+  username: String!
+  role: UserRole!
+  status: AccountStatus!
+  emailVerified: Boolean!
+  mfaEnabled: Boolean!
+  lastLoginAt: DateTime
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  # Nested
+  profile: Profile
+}
+
+type Profile {
+  id: UUID!
+  userId: UUID!
+  displayName: String!
+  bio: String
+  avatarUrl: String
+  coverImageUrl: String
+  websiteUrl: String
+  location: String
+  socialLinks: JSON
+  tags: [String!]
+
+  # Metrics (denormalized)
+  followerCount: Int!
+  followingCount: Int!
+  collaborationCount: Int!
+  totalLikes: Int!
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  # Nested
+  user: User
+}
+
+# ---- Content (Features: Feed, Trending Sounds, Live Streaming) ----
+
+type Post {
+  id: UUID!
+  userId: UUID!
+  contentType: ContentType!
+  status: ContentStatus!
+  title: String
+  body: String
+  caption: String
+  tags: [String!]
+  mentions: [UUID!]
+  soundTrack: String
+
+  # Metrics
+  likeCount: Int!
+  commentCount: Int!
+  shareCount: Int!
+  viewCount: Int!
+
+  # Scheduling
+  scheduledAt: DateTime
+  publishedAt: DateTime
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  # Nested
+  author: User
+  profile: Profile
+  media: [Media!]
+  comments: PostCommentsConnection
+}
+
+type Media {
+  id: UUID!
+  postId: UUID!
+  userId: UUID!
+  mediaType: String!
+  url: String!
+  thumbnailUrl: String
+  fileSizeBytes: Int
+  width: Int
+  height: Int
+  durationSeconds: Float
+  isProcessed: Boolean!
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Comment {
+  id: UUID!
+  postId: UUID!
+  userId: UUID!
+  parentId: UUID
+  body: String!
+  isEdited: Boolean!
+  likeCount: Int!
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  author: User
+  replies: [Comment!]
+}
+
+# ---- Collaboration (Feature: Collaboration Button & Marketplace) ----
+
+type Collaboration {
+  id: UUID!
+  initiatorId: UUID!
+  title: String!
+  description: String
+  status: CollaborationStatus!
+  contentType: String
+  platform: String
+  tags: [String!]
+
+  # Budget
+  budgetMin: Float
+  budgetMax: Float
+  budgetCurrency: String!
+
+  # Timeline
+  proposedAt: DateTime
+  startedAt: DateTime
+  completedAt: DateTime
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  initiator: User
+  participants: [CollaborationParticipant!]
+  milestones: [Milestone!]
+}
+
+type CollaborationParticipant {
+  id: UUID!
+  collaborationId: UUID!
+  userId: UUID!
+  role: String!
+  accepted: Boolean!
+  acceptedAt: DateTime
+
+  user: User
+}
+
+type Milestone {
+  id: UUID!
+  collaborationId: UUID!
+  title: String!
+  description: String
+  status: MilestoneStatus!
+  sortOrder: Int!
+  dueAt: DateTime
+  completedAt: DateTime
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# ---- Messaging (Feature: Direct Messaging) ----
+
+type Conversation {
+  id: UUID!
+  title: String
+  isGroup: Boolean!
+
+  # Preview
+  lastMessageText: String
+  lastMessageAt: DateTime
+  lastMessageBy: UUID
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  participants: [ConversationParticipant!]
+  messages: MessageConnection
+}
+
+type ConversationParticipant {
+  id: UUID!
+  conversationId: UUID!
+  userId: UUID!
+  isAdmin: Boolean!
+  lastReadAt: DateTime
+  isMuted: Boolean!
+
+  user: User
+}
+
+type Message {
+  id: UUID!
+  conversationId: UUID!
+  senderId: UUID!
+  body: String!
+  contentType: String!
+  attachments: JSON
+  isEdited: Boolean!
+  editedAt: DateTime
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  sender: User
+}
+
+# ---- Notifications (Feature: Real-time Notifications) ----
+
+type Notification {
+  id: UUID!
+  userId: UUID!
+  type: NotificationType!
+  title: String!
+  body: String
+  data: JSON
+  channel: NotificationChannel!
+  isRead: Boolean!
+  readAt: DateTime
+  actorId: UUID
+
+  createdAt: DateTime!
+
+  actor: User
+}
+
+# ---- Reputation (Feature: Reputation System) ----
+
+type ReputationScore {
+  id: UUID!
+  userId: UUID!
+  overallScore: Float!
+  collaborationScore: Float!
+  contentQualityScore: Float!
+  communityScore: Float!
+  reliabilityScore: Float!
+  totalEndorsements: Int!
+  completedCollaborations: Int!
+  onTimeDeliveryRate: Float!
+  computedAt: DateTime
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+type Endorsement {
+  id: UUID!
+  endorserId: UUID!
+  endorseeId: UUID!
+  category: String!
+  comment: String
+  rating: Int!
+  collaborationId: UUID
+
+  createdAt: DateTime!
+
+  endorser: User
+  endorsee: User
+}
+
+type Badge {
+  id: UUID!
+  name: String!
+  description: String
+  iconUrl: String
+  category: String!
+  tier: Int!
+
+  createdAt: DateTime!
+}
+
+type UserBadge {
+  id: UUID!
+  userId: UUID!
+  badgeId: UUID!
+
+  awardedAt: DateTime
+  awardedBy: UUID
+
+  badge: Badge
+}
+
+# ---- Live Streaming (Feature: Live Streaming) ----
+
+type LiveStream {
+  id: UUID!
+  userId: UUID!
+  title: String!
+  status: ContentStatus!
+  streamUrl: String
+  thumbnailUrl: String
+  viewerCount: Int!
+  startedAt: DateTime
+  endedAt: DateTime
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  streamer: User
+}
+
+# ---- Trending Sounds (Feature: Trending Sounds) ----
+
+type Sound {
+  id: UUID!
+  name: String!
+  artist: String
+  sourceUrl: String
+  coverUrl: String
+  usageCount: Int!
+  trendingScore: Float!
+}
+
+# ---- Creator Discovery (Feature: Creator Discovery) ----
+
+type CreatorCard {
+  user: User!
+  profile: Profile!
+  relevanceScore: Float!
+  matchingTags: [String!]
+  reputationScore: Float
+}
+
+# ---- Brand Partnerships (Feature: Brand Partnerships) ----
+
+type BrandOpportunity {
+  id: UUID!
+  brandId: UUID!
+  title: String!
+  description: String
+  requirements: JSON
+  budgetMin: Float
+  budgetMax: Float
+  budgetCurrency: String!
+  deadline: DateTime
+  status: CollaborationStatus!
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  brand: User
+  applications: [BrandApplication!]
+}
+
+type BrandApplication {
+  id: UUID!
+  opportunityId: UUID!
+  creatorId: UUID!
+  message: String
+  status: CollaborationStatus!
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+
+  creator: User
+}
+
+# ---- Search (Feature: Platform-wide Search) ----
+
+type SearchResult {
+  type: String!        # "user", "post", "sound", "collaboration", "brand_opportunity"
+  score: Float!
+  user: User
+  post: Post
+  sound: Sound
+  collaboration: Collaboration
+}
+
+# ---- Trust & Safety (Feature: Trust & Safety Reporting) ----
+
+type Report {
+  id: UUID!
+  reporterId: UUID!
+  targetType: ReportTargetType!
+  targetId: UUID!
+  reason: String!
+  description: String
+  status: ReportStatus!
+
+  createdAt: DateTime!
+  updatedAt: DateTime!
+}
+
+# ---- Analytics (Feature: Analytics Dashboard) ----
+
+type AnalyticsSummary {
+  periodStart: DateTime!
+  periodEnd: DateTime!
+
+  # Content
+  totalPosts: Int!
+  totalViews: Int!
+  totalLikes: Int!
+  totalComments: Int!
+  totalShares: Int!
+
+  # Audience
+  followerGrowth: Int!
+  newFollowers: Int!
+  lostFollowers: Int!
+
+  # Earnings / Collaboration
+  activeCollaborations: Int!
+  completedCollaborations: Int!
+  totalEarnings: Float
+  earningsCurrency: String!
+
+  # Engagement rate
+  engagementRate: Float!
+
+  # Per-post analytics
+  topPosts: [PostAnalytics!]
+}
+
+type PostAnalytics {
+  post: Post!
+  views: Int!
+  likes: Int!
+  comments: Int!
+  shares: Int!
+  avgWatchTime: Float
+  completionRate: Float
+}
+
+# ---- Auth Payload (Feature: Auth) ----
+
+type AuthPayload {
+  accessToken: String!
+  refreshToken: String!
+  tokenType: String!
+  expiresIn: Int!
+  user: User!
+}
+
+# ── Connection Types (Relay Pagination) ──────────────────────────────────────
+
+type PostConnection {
+  edges: [PostEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type PostEdge {
+  cursor: String!
+  node: Post!
+}
+
+type PostCommentsConnection {
+  edges: [CommentEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type CommentEdge {
+  cursor: String!
+  node: Comment!
+}
+
+type CollaborationConnection {
+  edges: [CollaborationEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type CollaborationEdge {
+  cursor: String!
+  node: Collaboration!
+}
+
+type MessageConnection {
+  edges: [MessageEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type MessageEdge {
+  cursor: String!
+  node: Message!
+}
+
+type NotificationConnection {
+  edges: [NotificationEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type NotificationEdge {
+  cursor: String!
+  node: Notification!
+}
+
+type ConversationConnection {
+  edges: [ConversationEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ConversationEdge {
+  cursor: String!
+  node: Conversation!
+}
+
+type CreatorCardConnection {
+  edges: [CreatorCardEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type CreatorCardEdge {
+  cursor: String!
+  node: CreatorCard!
+}
+
+type SearchResultConnection {
+  edges: [SearchResultEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type SearchResultEdge {
+  cursor: String!
+  node: SearchResult!
+}
+
+type LiveStreamConnection {
+  edges: [LiveStreamEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type LiveStreamEdge {
+  cursor: String!
+  node: LiveStream!
+}
+
+type BrandOpportunityConnection {
+  edges: [BrandOpportunityEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type BrandOpportunityEdge {
+  cursor: String!
+  node: BrandOpportunity!
+}
+
+type EndorsementConnection {
+  edges: [EndorsementEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type EndorsementEdge {
+  cursor: String!
+  node: Endorsement!
+}
+
+type ReportConnection {
+  edges: [ReportEdge!]!
+  pageInfo: PageInfo!
+  totalCount: Int!
+}
+
+type ReportEdge {
+  cursor: String!
+  node: Report!
+}
+
+# ── Input Types ──────────────────────────────────────────────────────────────
+
+input RegisterInput {
+  email: String!
+  username: String!
+  password: String!
+}
+
+input LoginInput {
+  email: String!
+  password: String!
+}
+
+input RefreshTokenInput {
+  refreshToken: String!
+}
+
+input UpdateProfileInput {
+  displayName: String
+  bio: String
+  avatarUrl: String
+  coverImageUrl: String
+  websiteUrl: String
+  location: String
+  socialLinks: JSON
+  tags: [String!]
+}
+
+input CreatePostInput {
+  contentType: ContentType!
+  title: String
+  body: String
+  caption: String
+  tags: [String!]
+  soundTrack: String
+  scheduledAt: DateTime
+  mediaUrls: [String!]
+}
+
+input UpdatePostInput {
+  title: String
+  body: String
+  caption: String
+  tags: [String!]
+  status: ContentStatus
+}
+
+input CreateCommentInput {
+  postId: UUID!
+  parentId: UUID
+  body: String!
+}
+
+input CreateCollaborationInput {
+  title: String!
+  description: String
+  contentType: String
+  platform: String
+  tags: [String!]
+  participantIds: [UUID!]!
+  budgetMin: Float
+  budgetMax: Float
+  budgetCurrency: String
+}
+
+input UpdateCollaborationInput {
+  title: String
+  description: String
+  status: CollaborationStatus
+  budgetMin: Float
+  budgetMax: Float
+}
+
+input AddMilestoneInput {
+  collaborationId: UUID!
+  title: String!
+  description: String
+  dueAt: DateTime
+}
+
+input UpdateMilestoneInput {
+  title: String
+  description: String
+  status: MilestoneStatus
+  dueAt: DateTime
+}
+
+input CreateConversationInput {
+  participantIds: [UUID!]!
+  title: String
+  initialMessage: String
+}
+
+input SendMessageInput {
+  conversationId: UUID!
+  body: String!
+  contentType: String
+  attachments: JSON
+}
+
+input CreateBrandOpportunityInput {
+  title: String!
+  description: String
+  requirements: JSON
+  budgetMin: Float
+  budgetMax: Float
+  budgetCurrency: String
+  deadline: DateTime
+}
+
+input ApplyToBrandInput {
+  opportunityId: UUID!
+  message: String
+}
+
+input EndorseUserInput {
+  endorseeId: UUID!
+  category: String!
+  comment: String
+  rating: Int!
+  collaborationId: UUID
+}
+
+input ReportContentInput {
+  targetType: ReportTargetType!
+  targetId: UUID!
+  reason: String!
+  description: String
+}
+
+input SearchInput {
+  query: String!
+  types: [String!]  # "user", "post", "sound", "collaboration", "brand_opportunity"
+}
+
+input FeedFilter {
+  algorithm: FeedAlgorithm
+  contentType: ContentType
+  tags: [String!]
+}
+
+input AnalyticsPeriod {
+  start: DateTime!
+  end: DateTime!
+}
+
+# ── Root Query ───────────────────────────────────────────────────────────────
+
+type Query {
+  # ---- Health ----
+  health: String!
+
+  # ---- Auth (Feature 14) ----
+  """
+  Get the currently authenticated user. Requires valid JWT.
+  """
+  me: User!
+
+  # ---- Profiles (Feature 4) ----
+  """
+  Get a user's public profile by user ID or username.
+  """
+  profile(userId: UUID, username: String): Profile
+  profiles(
+    userIds: [UUID!]
+    first: Int = 20
+    after: String
+  ): CreatorCardConnection
+
+  # ---- Feed (Feature 5) ----
+  """
+  Personalized feed for the authenticated user.
+  Uses Two-Tower model for ranking when algorithm is PERSONALIZED.
+  """
+  feed(
+    filter: FeedFilter
+    first: Int = 20
+    after: String
+  ): PostConnection!
+
+  """
+  Get a specific post by ID.
+  """
+  post(id: UUID!): Post
+
+  """
+  Get posts by a specific user.
+  """
+  userPosts(
+    userId: UUID!
+    first: Int = 20
+    after: String
+  ): PostConnection!
+
+  # ---- Collaboration (Feature 1) ----
+  """
+  List collaborations for the authenticated user (as initiator or participant).
+  """
+  myCollaborations(
+    status: CollaborationStatus
+    first: Int = 20
+    after: String
+  ): CollaborationConnection!
+
+  """
+  Browse the collaboration marketplace.
+  """
+  collaborationMarketplace(
+    tags: [String!]
+    contentType: String
+    first: Int = 20
+    after: String
+  ): CollaborationConnection!
+
+  """
+  Get a single collaboration by ID.
+  """
+  collaboration(id: UUID!): Collaboration
+
+  # ---- Messaging (Feature 6) ----
+  """
+  List conversations for the authenticated user.
+  """
+  conversations(
+    first: Int = 20
+    after: String
+  ): ConversationConnection!
+
+  """
+  Get messages for a conversation.
+  """
+  messages(
+    conversationId: UUID!
+    first: Int = 50
+    after: String
+  ): MessageConnection!
+
+  # ---- Notifications (Feature 11) ----
+  """
+  Notifications for the authenticated user.
+  """
+  notifications(
+    unreadOnly: Boolean = false
+    first: Int = 20
+    after: String
+  ): NotificationConnection!
+
+  """
+  Count of unread notifications.
+  """
+  unreadNotificationCount: Int!
+
+  # ---- Reputation (Feature 3) ----
+  """
+  Get a user's reputation score.
+  """
+  reputation(userId: UUID!): ReputationScore
+
+  """
+  Get endorsements for a user.
+  """
+  endorsements(
+    userId: UUID!
+    category: String
+    first: Int = 20
+    after: String
+  ): EndorsementConnection!
+
+  """
+  Get a user's earned badges.
+  """
+  userBadges(userId: UUID!): [UserBadge!]!
+
+  """
+  List all available badge definitions.
+  """
+  badges: [Badge!]!
+
+  # ---- Live Streaming (Feature 7) ----
+  """
+  Currently active live streams.
+  """
+  liveStreams(
+    first: Int = 20
+    after: String
+  ): LiveStreamConnection!
+
+  """
+  Get a specific live stream.
+  """
+  liveStream(id: UUID!): LiveStream
+
+  # ---- Trending Sounds (Feature 8) ----
+  """
+  Currently trending sounds.
+  """
+  trendingSounds(
+    limit: Int = 20
+  ): [Sound!]!
+
+  # ---- Creator Discovery (Feature 9) ----
+  """
+  Discover creators matching tags, interests, or free-text query.
+  Uses ANN search via pgvector for tag-based discovery.
+  Uses Agentic Router (LLM) for complex natural-language queries.
+  """
+  discoverCreators(
+    query: String
+    tags: [String!]
+    first: Int = 20
+    after: String
+  ): CreatorCardConnection!
+
+  # ---- Brand Partnerships (Feature 10) ----
+  """
+  Browse brand partnership opportunities.
+  """
+  brandOpportunities(
+    status: CollaborationStatus
+    first: Int = 20
+    after: String
+  ): BrandOpportunityConnection!
+
+  """
+  Get a specific brand opportunity.
+  """
+  brandOpportunity(id: UUID!): BrandOpportunity
+
+  # ---- Search (Feature 12) ----
+  """
+  Platform-wide search across users, posts, sounds, and collaborations.
+  """
+  search(
+    input: SearchInput!
+    first: Int = 20
+    after: String
+  ): SearchResultConnection!
+
+  # ---- Analytics (Feature 13) ----
+  """
+  Get analytics summary for the authenticated creator.
+  """
+  creatorAnalytics(
+    period: AnalyticsPeriod!
+  ): AnalyticsSummary!
+
+  """
+  Get analytics for a specific post.
+  """
+  postAnalytics(
+    postId: UUID!
+  ): PostAnalytics
+
+  # ---- Trust & Safety (Feature 14) ----
+  """
+  Get reports submitted by the authenticated user.
+  """
+  myReports(
+    first: Int = 20
+    after: String
+  ): ReportConnection!
+}
+
+# ── Root Mutation ────────────────────────────────────────────────────────────
+
+type Mutation {
+  # ---- Auth ----
+  """
+  Register a new user. Returns JWT tokens.
+  """
+  register(input: RegisterInput!): AuthPayload!
+
+  """
+  Login with email and password. Returns JWT tokens.
+  """
+  login(input: LoginInput!): AuthPayload!
+
+  """
+  Refresh an expired access token using a valid refresh token.
+  """
+  refreshToken(input: RefreshTokenInput!): AuthPayload!
+
+  """
+  Logout — blacklists the current token.
+  """
+  logout: Boolean!
+
+  # ---- Profiles ----
+  """
+  Update the authenticated user's profile.
+  """
+  updateProfile(input: UpdateProfileInput!): Profile!
+
+  # ---- Content ----
+  """
+  Create a new post.
+  """
+  createPost(input: CreatePostInput!): Post!
+
+  """
+  Update an existing post.
+  """
+  updatePost(id: UUID!, input: UpdatePostInput!): Post!
+
+  """
+  Delete a post (soft delete).
+  """
+  deletePost(id: UUID!): Boolean!
+
+  """
+  Like or unlike a post. Returns the new like count.
+  """
+  likePost(postId: UUID!): Int!
+
+  """
+  Add a comment to a post.
+  """
+  createComment(input: CreateCommentInput!): Comment!
+
+  """
+  Delete a comment.
+  """
+  deleteComment(id: UUID!): Boolean!
+
+  # ---- Collaboration ----
+  """
+  Create a collaboration proposal.
+  """
+  createCollaboration(input: CreateCollaborationInput!): Collaboration!
+
+  """
+  Update a collaboration.
+  """
+  updateCollaboration(id: UUID!, input: UpdateCollaborationInput!): Collaboration!
+
+  """
+  Accept a collaboration invitation.
+  """
+  acceptCollaboration(id: UUID!): CollaborationParticipant!
+
+  """
+  Decline a collaboration invitation.
+  """
+  declineCollaboration(id: UUID!): Boolean!
+
+  """
+  Add a milestone to a collaboration.
+  """
+  addMilestone(input: AddMilestoneInput!): Milestone!
+
+  """
+  Update a milestone.
+  """
+  updateMilestone(id: UUID!, input: UpdateMilestoneInput!): Milestone!
+
+  # ---- Messaging ----
+  """
+  Create a new conversation or group chat.
+  """
+  createConversation(input: CreateConversationInput!): Conversation!
+
+  """
+  Send a message in a conversation.
+  """
+  sendMessage(input: SendMessageInput!): Message!
+
+  # ---- Notifications ----
+  """
+  Mark a notification as read.
+  """
+  markNotificationRead(id: UUID!): Boolean!
+
+  """
+  Mark all notifications as read.
+  """
+  markAllNotificationsRead: Boolean!
+
+  # ---- Reputation ----
+  """
+  Endorse another user (requires completed collaboration context).
+  """
+  endorseUser(input: EndorseUserInput!): Endorsement!
+
+  # ---- Live Streaming ----
+  """
+  Start a live stream.
+  """
+  startLiveStream(title: String!): LiveStream!
+
+  """
+  End a live stream.
+  """
+  endLiveStream(id: UUID!): LiveStream!
+
+  # ---- Brand Partnerships ----
+  """
+  Create a brand partnership opportunity.
+  """
+  createBrandOpportunity(input: CreateBrandOpportunityInput!): BrandOpportunity!
+
+  """
+  Apply to a brand partnership opportunity.
+  """
+  applyToBrandOpportunity(input: ApplyToBrandInput!): BrandApplication!
+
+  # ---- Trust & Safety ----
+  """
+  Report content or a user.
+  """
+  reportContent(input: ReportContentInput!): Report!
+}
+
+# ── Root Subscription ────────────────────────────────────────────────────────
+
+type Subscription {
+  """
+  Real-time feed updates when new posts are created.
+  """
+  feedUpdated: Post!
+
+  """
+  Real-time collaboration status changes.
+  """
+  collaborationUpdated(collaborationId: UUID!): Collaboration!
+
+  """
+  New message received in any conversation the user participates in.
+  """
+  messageReceived: Message!
+
+  """
+  New notification for the authenticated user.
+  """
+  notificationReceived: Notification!
+
+  """
+  Badge earned by the authenticated user.
+  """
+  badgeEarned: UserBadge!
+
+  """
+  Live stream status changes for a specific stream.
+  """
+  liveStreamUpdated(liveStreamId: UUID!): LiveStream!
+}
