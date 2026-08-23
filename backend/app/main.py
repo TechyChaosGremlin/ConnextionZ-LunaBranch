@@ -71,7 +71,7 @@ def create_app() -> FastAPI:
     # CORS
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.CORS_ORIGINS,
+        allow_origins=settings.cors_origins,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -83,9 +83,9 @@ def create_app() -> FastAPI:
     # ── Routers ─────────────────────────────────────────────
     app.include_router(auth_router)
 
-    # GraphQL (Strawberry)
+    # GraphQL (Strawberry) — served at /graphql to match the frontend's api-config.ts
     graphql_router = create_graphql_router(async_session_factory)
-    app.include_router(graphql_router, prefix="/api")
+    app.include_router(graphql_router, prefix="/graphql")
 
     # ── Health Checks ───────────────────────────────────────
 

@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Optional, List, Callable
+from enum import Enum
+from typing import AsyncIterator, Optional, List, Callable
 
 import strawberry
 from fastapi import Request, Response
@@ -96,7 +97,7 @@ class AppContext(BaseContext):
 
 
 @strawberry.enum
-class UserRole:
+class UserRole(Enum):
     ADMIN = "admin"
     CREATOR = "creator"
     USER = "user"
@@ -104,7 +105,7 @@ class UserRole:
 
 
 @strawberry.enum
-class AccountStatus:
+class AccountStatus(Enum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
     BANNED = "banned"
@@ -112,7 +113,7 @@ class AccountStatus:
 
 
 @strawberry.enum
-class ContentType:
+class ContentType(Enum):
     POST = "post"
     VIDEO = "video"
     IMAGE = "image"
@@ -121,7 +122,7 @@ class ContentType:
 
 
 @strawberry.enum
-class ContentStatus:
+class ContentStatus(Enum):
     DRAFT = "draft"
     PUBLISHED = "published"
     ARCHIVED = "archived"
@@ -130,7 +131,7 @@ class ContentStatus:
 
 
 @strawberry.enum
-class CollaborationStatus:
+class CollaborationStatus(Enum):
     PROPOSED = "proposed"
     ACCEPTED = "accepted"
     DECLINED = "declined"
@@ -140,7 +141,7 @@ class CollaborationStatus:
 
 
 @strawberry.enum
-class MilestoneStatus:
+class MilestoneStatus(Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
@@ -148,7 +149,7 @@ class MilestoneStatus:
 
 
 @strawberry.enum
-class NotificationType:
+class NotificationType(Enum):
     COLLABORATION_INVITE = "collaboration_invite"
     COLLABORATION_ACCEPTED = "collaboration_accepted"
     COLLABORATION_COMPLETED = "collaboration_completed"
@@ -164,14 +165,14 @@ class NotificationType:
 
 
 @strawberry.enum
-class NotificationChannel:
+class NotificationChannel(Enum):
     IN_APP = "in_app"
     PUSH = "push"
     EMAIL = "email"
 
 
 @strawberry.enum
-class ReportTargetType:
+class ReportTargetType(Enum):
     POST = "post"
     COMMENT = "comment"
     USER = "user"
@@ -179,7 +180,7 @@ class ReportTargetType:
 
 
 @strawberry.enum
-class ReportStatus:
+class ReportStatus(Enum):
     PENDING = "pending"
     REVIEWING = "reviewing"
     RESOLVED = "resolved"
@@ -187,13 +188,13 @@ class ReportStatus:
 
 
 @strawberry.enum
-class SortDirection:
+class SortDirection(Enum):
     ASC = "ASC"
     DESC = "DESC"
 
 
 @strawberry.enum
-class FeedAlgorithm:
+class FeedAlgorithm(Enum):
     PERSONALIZED = "PERSONALIZED"
     TRENDING = "TRENDING"
     RECENT = "RECENT"
@@ -312,7 +313,179 @@ class CommentType:
     updated_at: DateTimeScalar
 
 
-# ── Collaboration Types ──────────────────────────────────────────────────────
+# ── Legacy-compatible content/social types ───────────────────────────────────
+#
+# These mirror the old backend's GraphQL shape field-for-field so the
+# frontend (src/app/*.ts) works unmodified. They're additive: Seth's
+# PostType/ProfileType/CommentType above stay as-is for the collaboration/
+# messaging/reputation domains.
+
+
+@strawberry.type
+class ProfileSummaryType:
+    id: UUIDScalar
+    username: str
+    display_name: str
+    avatar_url: str = ""
+    avatar_color: str = "#00AEEF"
+    verified: bool = False
+    collab_score: float = 0.0
+    collab_count: int = 0
+    followers: int = 0
+    following: int = 0
+    open_to_collab: bool = True
+    private_account: bool = False
+    is_following: bool = False
+
+
+@strawberry.type
+class ContentItemType:
+    id: UUIDScalar
+    thumbnail: str = ""
+    media_url: Optional[str] = None
+    caption: str = ""
+    views: int = 0
+    likes: int = 0
+    is_liked: bool = False
+    collab_with: Optional[str] = None
+    hashtags: List[str] = strawberry.field(default_factory=list)
+    audio: str = "Original Sound"
+    visibility: str = "public"
+    allow_comments: bool = True
+    allow_collabs: bool = True
+    duration_sec: float = 0.0
+    comments: int = 0
+    shares: int = 0
+    saves: int = 0
+    is_saved: bool = False
+    is_shared: bool = False
+    status: str = "published"
+    scheduled_at: Optional[str] = None
+
+
+@strawberry.type
+class FeedItemType(ContentItemType):
+    creator: ProfileSummaryType = None  # type: ignore[assignment]
+
+
+@strawberry.type
+class ProfileDetailType:
+    id: UUIDScalar
+    username: str
+    display_name: str
+    avatar_url: str = ""
+    avatar_color: str = "#00AEEF"
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    website: Optional[str] = None
+    verified: bool = False
+    online: bool = True
+    collab_status: Optional[str] = None
+    collab_score: float = 0.0
+    collab_count: int = 0
+    followers: int = 0
+    following: int = 0
+    open_to_collab: bool = True
+    private_account: bool = False
+    response_time: str = "< 4 hours"
+    posts: List[ContentItemType] = strawberry.field(default_factory=list)
+    playlists: List["PlaylistType"] = strawberry.field(default_factory=list)
+    is_following: bool = False
+
+
+@strawberry.type
+class CommentGQLType:
+    id: UUIDScalar
+    text: str
+    likes: int = 0
+    is_liked: bool = False
+    can_delete: bool = False
+    can_edit: bool = False
+    moderation_status: str = "approved"
+    created_at: str = ""
+    author: ProfileSummaryType = None  # type: ignore[assignment]
+
+
+@strawberry.type
+class PlaylistType:
+    id: UUIDScalar
+    title: str
+    cover: str
+    item_label: str
+    plays: int = 0
+
+
+@strawberry.type
+class SoundResultGQLType:
+    id: UUIDScalar
+    title: str
+    creator: str
+    creator_avatar: str = ""
+    artwork: str = ""
+    genre: str = ""
+    video_count: int = 0
+    total_plays: int = 0
+    rank: int = 0
+    growth_pct: int = 0
+    duration: str = "0:30"
+    bpm: int = 0
+
+
+@strawberry.type
+class FeedPageType:
+    items: List[FeedItemType]
+    next_cursor: Optional[str] = None
+
+
+@strawberry.type
+class PostPageType:
+    items: List[ContentItemType]
+    next_cursor: Optional[str] = None
+
+
+@strawberry.type
+class CommentPageType:
+    comments: List[CommentGQLType]
+    next_cursor: Optional[str] = None
+
+
+@strawberry.type
+class ProfilePageType:
+    profiles: List[ProfileSummaryType]
+    next_cursor: Optional[str] = None
+
+
+@strawberry.type
+class LikeResultType:
+    liked: bool
+    likes: int
+
+
+@strawberry.type
+class SaveResultType:
+    saved: bool
+    saves: int
+
+
+@strawberry.type
+class ShareResultType:
+    shares: int
+    shared: bool
+
+
+@strawberry.type
+class FollowResultType:
+    following: bool
+    followers: int
+    following_count: int
+
+
+@strawberry.type
+class WatchResultType:
+    views: int
+    watched_seconds: float
+    completed: bool
+    rewatched: bool
 
 
 @strawberry.type
@@ -702,6 +875,64 @@ class CreatePostInput:
 
 
 @strawberry.input
+class UpdatePostInput:
+    caption: Optional[str] = None
+    collab_with: Optional[str] = None
+    hashtags: Optional[List[str]] = None
+    audio: Optional[str] = None
+    visibility: Optional[str] = None
+    allow_comments: Optional[bool] = None
+    allow_collabs: Optional[bool] = None
+    duration_sec: Optional[float] = None
+    status: Optional[str] = None
+    scheduled_at: Optional[str] = None
+
+
+@strawberry.input
+class PostInput:
+    media_id: UUIDScalar
+    thumbnail_media_id: UUIDScalar
+    caption: Optional[str] = None
+    collab_with: Optional[str] = None
+    hashtags: List[str] = strawberry.field(default_factory=list)
+    audio: str = "Original Sound"
+    visibility: str = "public"
+    allow_comments: bool = True
+    allow_collabs: bool = True
+    duration_sec: float = 0.0
+    status: str = "published"
+    scheduled_at: Optional[str] = None
+
+
+@strawberry.input
+class UpdateProfileInput:
+    username: Optional[str] = None
+    display_name: Optional[str] = None
+    bio: Optional[str] = None
+    location: Optional[str] = None
+    website: Optional[str] = None
+    avatar_url: Optional[str] = None
+    avatar_color: Optional[str] = None
+    collab_status: Optional[str] = None
+    open_to_collab: Optional[bool] = None
+    private_account: Optional[bool] = None
+
+
+@strawberry.input
+class PlaylistInput:
+    title: str
+    cover: str
+    item_label: str
+
+
+@strawberry.input
+class UpdatePlaylistInput:
+    title: Optional[str] = None
+    cover: Optional[str] = None
+    item_label: Optional[str] = None
+
+
+@strawberry.input
 class FeedFilter:
     algorithm: Optional[FeedAlgorithm] = None
     content_type: Optional[ContentType] = None
@@ -738,6 +969,34 @@ class CreateCollaborationInput:
     budget_min: Optional[float] = None
     budget_max: Optional[float] = None
     budget_currency: Optional[str] = None
+
+
+@strawberry.input
+class UpdateCollaborationInput:
+    title: Optional[str] = None
+    description: Optional[str] = None
+    content_type: Optional[str] = None
+    platform: Optional[str] = None
+    tags: Optional[List[str]] = None
+    budget_min: Optional[float] = None
+    budget_max: Optional[float] = None
+    budget_currency: Optional[str] = None
+
+
+@strawberry.input
+class AddMilestoneInput:
+    collaboration_id: UUIDScalar
+    title: str
+    description: Optional[str] = None
+    due_date: Optional[DateTimeScalar] = None
+
+
+@strawberry.input
+class UpdateMilestoneInput:
+    title: Optional[str] = None
+    description: Optional[str] = None
+    status: Optional[MilestoneStatus] = None
+    due_date: Optional[DateTimeScalar] = None
 
 
 @strawberry.input
@@ -948,44 +1207,95 @@ class Query:
 
     # -- Auth (Feature 14) --
     @strawberry.field
-    async def me(self, info: StrawberryInfo[AppContext, None]) -> UserType:
-        """Get the currently authenticated user. Requires valid JWT."""
+    async def me(self, info: StrawberryInfo[AppContext, None]) -> Optional[ProfileDetailType]:
+        """Get the currently authenticated user's profile."""
         user: User = info.context.require_auth()
-        return _user_to_gql(user)
+        return await _profile_detail_for_user(info.context, user)
 
     # -- Profiles (Feature 4) --
     @strawberry.field
     async def profile(
         self,
         info: StrawberryInfo[AppContext, None],
-        user_id: Optional[UUIDScalar] = None,
         username: Optional[str] = None,
-    ) -> Optional[ProfileType]:
-        """Get a user's public profile by user ID or username."""
+        user_id: Optional[UUIDScalar] = None,
+    ) -> Optional[ProfileDetailType]:
+        """Get a user's public profile by username (or user ID)."""
         return await _profile(info.context, user_id, username)
 
     @strawberry.field
-    async def profiles(
+    async def search_profiles(
         self,
         info: StrawberryInfo[AppContext, None],
-        user_ids: Optional[List[UUIDScalar]] = None,
-        first: int = 20,
+        query: str,
         after: Optional[str] = None,
-    ) -> CreatorCardConnection:
-        """List creator profiles."""
-        return await _profiles(info.context, user_ids, first, after)
+        limit: int = 20,
+        verified_only: bool = False,
+        open_to_collab: Optional[bool] = None,
+    ) -> ProfilePageType:
+        """Search creator profiles by username/display name."""
+        return await _search_profiles(info.context, query, after, limit, verified_only, open_to_collab)
+
+    @strawberry.field
+    async def suggested_profiles(
+        self, info: StrawberryInfo[AppContext, None], limit: int = 10
+    ) -> List[ProfileSummaryType]:
+        """Suggested creators to follow."""
+        return await _suggested_profiles(info.context, limit)
+
+    @strawberry.field
+    async def my_following(self, info: StrawberryInfo[AppContext, None]) -> List[ProfileSummaryType]:
+        """Profiles the authenticated user follows."""
+        return await _my_following(info.context)
+
+    @strawberry.field
+    async def my_following_page(
+        self, info: StrawberryInfo[AppContext, None], after: Optional[str] = None, limit: int = 20
+    ) -> ProfilePageType:
+        return await _following_page_for(info.context, None, after, limit)
+
+    @strawberry.field
+    async def my_followers(self, info: StrawberryInfo[AppContext, None]) -> List[ProfileSummaryType]:
+        """Profiles following the authenticated user."""
+        return await _my_followers(info.context)
+
+    @strawberry.field
+    async def my_followers_page(
+        self, info: StrawberryInfo[AppContext, None], after: Optional[str] = None, limit: int = 20
+    ) -> ProfilePageType:
+        return await _followers_page_for(info.context, None, after, limit)
+
+    @strawberry.field
+    async def followers_page(
+        self,
+        info: StrawberryInfo[AppContext, None],
+        username: str,
+        after: Optional[str] = None,
+        limit: int = 20,
+    ) -> ProfilePageType:
+        return await _followers_page_for(info.context, username, after, limit)
+
+    @strawberry.field
+    async def following_page(
+        self,
+        info: StrawberryInfo[AppContext, None],
+        username: str,
+        after: Optional[str] = None,
+        limit: int = 20,
+    ) -> ProfilePageType:
+        return await _following_page_for(info.context, username, after, limit)
 
     # -- Feed (Feature 5) --
     @strawberry.field
     async def feed(
         self,
         info: StrawberryInfo[AppContext, None],
-        filter: Optional[FeedFilter] = None,
-        first: int = 20,
-        after: Optional[str] = None,
-    ) -> PostConnection:
+        cursor: Optional[str] = None,
+        limit: int = 10,
+        following: bool = False,
+    ) -> FeedPageType:
         """Personalized feed for the authenticated user."""
-        return await _feed(info.context, filter, first, after)
+        return await _feed(info.context, cursor, limit, following)
 
     @strawberry.field
     async def post(self, info: StrawberryInfo[AppContext, None], id: UUIDScalar) -> Optional[PostType]:
@@ -1002,6 +1312,18 @@ class Query:
     ) -> PostConnection:
         """Get posts by a specific user."""
         return await _user_posts(info.context, user_id, first, after)
+
+    @strawberry.field
+    async def my_posts(self, info: StrawberryInfo[AppContext, None]) -> List[ContentItemType]:
+        """The authenticated user's own posts (all statuses)."""
+        return await _my_posts(info.context)
+
+    @strawberry.field
+    async def comments(
+        self, info: StrawberryInfo[AppContext, None], post_id: UUIDScalar, limit: int = 50
+    ) -> List[CommentGQLType]:
+        """Top-level comments for a post."""
+        return await _comments(info.context, post_id, limit)
 
     # -- Collaboration (Feature 1) --
     @strawberry.field
@@ -1238,17 +1560,32 @@ class Mutation:
     @strawberry.mutation
     async def update_profile(
         self, info: StrawberryInfo[AppContext, None], input: UpdateProfileInput
-    ) -> ProfileType:
+    ) -> ProfileDetailType:
         """Update the authenticated user's profile."""
         return await _update_profile(info.context, input)
+
+    @strawberry.mutation
+    async def delete_account(self, info: StrawberryInfo[AppContext, None]) -> bool:
+        """Permanently delete the authenticated user's account and all owned data."""
+        return await _delete_account(info.context)
+
+    @strawberry.mutation
+    async def follow(self, info: StrawberryInfo[AppContext, None], username: str) -> FollowResultType:
+        """Follow a creator by username."""
+        return await _follow(info.context, username)
+
+    @strawberry.mutation
+    async def unfollow(self, info: StrawberryInfo[AppContext, None], username: str) -> FollowResultType:
+        """Unfollow a creator by username."""
+        return await _unfollow(info.context, username)
 
     # -- Content --
     @strawberry.mutation
     async def create_post(
-        self, info: StrawberryInfo[AppContext, None], input: CreatePostInput
-    ) -> PostType:
+        self, info: StrawberryInfo[AppContext, None], input: PostInput
+    ) -> ContentItemType:
         """Create a new post."""
-        return await _create_post(info.context, input)
+        return await _create_post_legacy(info.context, input)
 
     @strawberry.mutation
     async def delete_post(self, info: StrawberryInfo[AppContext, None], id: UUIDScalar) -> bool:
@@ -1256,35 +1593,92 @@ class Mutation:
         return await _delete_post(info.context, id)
 
     @strawberry.mutation
-    async def like_post(self, info: StrawberryInfo[AppContext, None], post_id: UUIDScalar) -> int:
-        """Like or unlike a post. Returns the new like count."""
-        return await _like_post(info.context, post_id)
+    async def like_post(self, info: StrawberryInfo[AppContext, None], id: UUIDScalar) -> LikeResultType:
+        """Like a post. Returns the new liked state and like count."""
+        return await _like_post_legacy(info.context, id, like=True)
+
+    @strawberry.mutation
+    async def unlike_post(self, info: StrawberryInfo[AppContext, None], id: UUIDScalar) -> LikeResultType:
+        """Unlike a post. Returns the new liked state and like count."""
+        return await _like_post_legacy(info.context, id, like=False)
+
+    @strawberry.mutation
+    async def save_post(self, info: StrawberryInfo[AppContext, None], id: UUIDScalar) -> SaveResultType:
+        """Save a post to the authenticated user's collection."""
+        return await _save_post_legacy(info.context, id, save=True)
+
+    @strawberry.mutation
+    async def unsave_post(self, info: StrawberryInfo[AppContext, None], id: UUIDScalar) -> SaveResultType:
+        """Remove a post from the authenticated user's saved collection."""
+        return await _save_post_legacy(info.context, id, save=False)
 
     @strawberry.mutation
     async def update_post(
         self, info: StrawberryInfo[AppContext, None], id: UUIDScalar, input: UpdatePostInput
-    ) -> PostType:
+    ) -> ContentItemType:
         """Update an existing post."""
-        return await _update_post(info.context, id, input)
+        return await _update_post_legacy(info.context, id, input)
 
     @strawberry.mutation
     async def share_post(
-        self, info: StrawberryInfo[AppContext, None], post_id: UUIDScalar
-    ) -> PostType:
+        self, info: StrawberryInfo[AppContext, None], id: UUIDScalar
+    ) -> ShareResultType:
         """Share a post to the current user's feed."""
-        return await _share_post(info.context, post_id)
+        return await _share_post_legacy(info.context, id)
+
+    @strawberry.mutation
+    async def track_post_watch(
+        self,
+        info: StrawberryInfo[AppContext, None],
+        post_id: UUIDScalar,
+        watched_seconds: float,
+        completed: bool,
+    ) -> WatchResultType:
+        """Record a watch event for feed-ranking and view counts."""
+        return await _track_post_watch(info.context, post_id, watched_seconds, completed)
 
     @strawberry.mutation
     async def create_comment(
         self, info: StrawberryInfo[AppContext, None], input: CreateCommentInput
     ) -> CommentType:
-        """Add a comment to a post."""
+        """Add a comment to a post (Seth's original collaboration-domain resolver)."""
         return await _create_comment(info.context, input)
+
+    @strawberry.mutation
+    async def add_comment(
+        self, info: StrawberryInfo[AppContext, None], post_id: UUIDScalar, text: str
+    ) -> CommentGQLType:
+        """Add a comment to a post."""
+        return await _add_comment(info.context, post_id, text)
+
+    @strawberry.mutation
+    async def edit_comment(
+        self, info: StrawberryInfo[AppContext, None], id: UUIDScalar, text: str
+    ) -> CommentGQLType:
+        """Edit the authenticated user's own comment."""
+        return await _edit_comment(info.context, id, text)
 
     @strawberry.mutation
     async def delete_comment(self, info: StrawberryInfo[AppContext, None], id: UUIDScalar) -> bool:
         """Delete a comment."""
-        return await _delete_comment(info.context, id)
+        return await _delete_comment_legacy(info.context, id)
+
+    @strawberry.mutation
+    async def like_comment(self, info: StrawberryInfo[AppContext, None], id: UUIDScalar) -> LikeResultType:
+        """Like a comment. Returns the new liked state and like count."""
+        return await _like_comment_legacy(info.context, id, like=True)
+
+    @strawberry.mutation
+    async def unlike_comment(self, info: StrawberryInfo[AppContext, None], id: UUIDScalar) -> LikeResultType:
+        """Unlike a comment. Returns the new liked state and like count."""
+        return await _like_comment_legacy(info.context, id, like=False)
+
+    @strawberry.mutation
+    async def report_comment(
+        self, info: StrawberryInfo[AppContext, None], id: UUIDScalar, reason: str
+    ) -> bool:
+        """Report a comment for moderation review."""
+        return await _report_comment(info.context, id, reason)
 
     # -- Collaboration --
     @strawberry.mutation
@@ -1774,19 +2168,21 @@ async def _logout(ctx: AppContext) -> bool:
 _UNIMPL = " not yet implemented — feature module pending"
 
 
-async def _profile(ctx, user_id, username) -> Optional[ProfileType]:
-    """Get a user's public profile by user ID or username."""
+async def _profile(ctx, user_id, username) -> Optional[ProfileDetailType]:
+    """Get a user's public profile by user ID or username (legacy shape)."""
     from repositories.profile_repository import ProfileRepository
 
     profile_repo = ProfileRepository(ctx.db)
 
     profile = None
-    if user_id:
-        profile = await profile_repo.get_by_user_id(user_id)
-    elif username:
+    if username:
         profile = await profile_repo.get_by_username(username)
+    elif user_id:
+        profile = await profile_repo.get_by_user_id(user_id)
 
-    return _profile_to_gql(profile) if profile else None
+    if not profile:
+        return None
+    return await _profile_to_detail(ctx, profile)
 
 
 async def _profiles(ctx, user_ids, first, after) -> CreatorCardConnection:
@@ -1809,62 +2205,44 @@ async def _profiles(ctx, user_ids, first, after) -> CreatorCardConnection:
     )
 
 
-async def _feed(ctx, filter, first, after) -> PostConnection:
-    """Resolve feed query - personalized feed for the authenticated user."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
-    
+async def _feed(ctx, cursor, limit, following) -> FeedPageType:
+    """Personalized feed for the authenticated user (legacy cursor-page shape)."""
     from uuid import UUID as UUID_type
     from repositories.content_repository import PostRepository
-    
-    repo = PostRepository(ctx.db)
-    
-    # Parse cursor for pagination
-    before_id = None
-    if after:
+    from repositories.social_repository import FollowRepository
+    from app.models.content import ContentStatus
+
+    user = ctx.require_auth()
+    post_repo = PostRepository(ctx.db)
+    follow_repo = FollowRepository(ctx.db)
+
+    before_id: Optional[uuid.UUID] = None
+    if cursor:
         try:
-            before_id = UUID_type(after)
+            before_id = UUID_type(cursor)
         except ValueError:
-            raise ValueError("Invalid cursor")
-    
-    # Get feed posts (simplified - just gets user's posts for now)
-    # In production, this would use algorithm based on follows, interests, etc.
-    posts = await repo.get_feed(
-        user_id=ctx.user.id,
-        limit=first + 1,  # Fetch one extra to check hasNextPage
-        before_id=before_id,
+            raise ValueError("Invalid feed cursor")
+
+    if following:
+        author_ids = await follow_repo.get_following_ids(user.id)
+        if not author_ids:
+            return FeedPageType(items=[], next_cursor=None)
+    else:
+        author_ids = await follow_repo.get_following_ids(user.id)
+        author_ids = author_ids + [user.id]
+
+    posts = await post_repo.get_feed(
+        user_ids=author_ids, limit=limit + 1, before_id=before_id,
     )
-    
-    # Apply filters if provided
-    if filter:
-        if filter.content_type:
-            posts = [p for p in posts if p.content_type.value == filter.content_type.value]
-        if filter.tags:
-            posts = [p for p in posts if p.tags and any(tag in p.tags for tag in filter.tags)]
-    
-    # Check if there are more results
-    has_next_page = len(posts) > first
-    if has_next_page:
-        posts = posts[:first]
-    
-    # Build edges
-    edges = [
-        PostEdge(
-            node=_post_to_gql(p),
-            cursor=str(p.id),
-        )
-        for p in posts
-    ]
-    
-    # Build page info
-    page_info = PageInfo(
-        has_next_page=has_next_page,
-        has_previous_page=False,
-        start_cursor=edges[0].cursor if edges else None,
-        end_cursor=edges[-1].cursor if edges else None,
-    )
-    
-    return PostConnection(edges=edges, page_info=page_info)
+    posts = [p for p in posts if p.status == ContentStatus.PUBLISHED]
+
+    has_more = len(posts) > limit
+    if has_more:
+        posts = posts[:limit]
+
+    items = [await _post_to_feed_item(ctx, p) for p in posts]
+    next_cursor = str(posts[-1].id) if has_more and posts else None
+    return FeedPageType(items=items, next_cursor=next_cursor)
 
 
 async def _post(ctx, id) -> Optional[PostType]:
@@ -2771,8 +3149,8 @@ async def _my_reports(ctx, first, after) -> ReportConnection:
     return ReportConnection(edges=edges, page_info=page_info)
 
 
-async def _update_profile(ctx, input) -> ProfileType:
-    """Update the authenticated user's profile."""
+async def _update_profile(ctx, input) -> ProfileDetailType:
+    """Update the authenticated user's profile (legacy field names)."""
     from repositories.profile_repository import ProfileRepository
     from app.models.user import Profile
 
@@ -2781,26 +3159,32 @@ async def _update_profile(ctx, input) -> ProfileType:
 
     profile = await profile_repo.get_by_user_id(user.id)
     if not profile:
-        # Auto-create profile on first update
-        profile = Profile(
-            user_id=user.id,
-            display_name=user.username,
-        )
+        profile = Profile(user_id=user.id, display_name=user.username)
         await profile_repo.create(profile)
 
-    # Apply updates from input
-    for field in (
-        "display_name", "bio", "avatar_url", "cover_image_url",
-        "website_url", "location", "social_links", "tags",
-    ):
-        value = getattr(input, field, None)
+    if input.username is not None and input.username != user.username:
+        user.username = input.username
+
+    field_map = {
+        "display_name": "display_name",
+        "bio": "bio",
+        "location": "location",
+        "website": "website_url",
+        "avatar_url": "avatar_url",
+        "avatar_color": "avatar_color",
+        "collab_status": "collab_status",
+        "open_to_collab": "open_to_collab",
+        "private_account": "private_account",
+    }
+    for input_field, model_field in field_map.items():
+        value = getattr(input, input_field, None)
         if value is not None:
-            setattr(profile, field, value)
+            setattr(profile, model_field, value)
 
     await profile_repo.update(profile)
     await ctx.db.commit()
 
-    return _profile_to_gql(profile)
+    return await _profile_to_detail(ctx, profile)
 
 
 async def _create_post(ctx, input) -> PostType:
@@ -3538,6 +3922,636 @@ async def _report_content(ctx, input) -> ReportType:
     )
 
 
+# ── Legacy-compatible content/social resolvers ───────────────────────────────
+#
+# Backs the additive types/mutations declared above. Mirrors the old
+# backend's behavior (toggle-style like/save, denormalized counts refreshed
+# from the join tables, one PostWatch row per call) on top of Seth's
+# repository pattern.
+
+
+def _iso(dt) -> Optional[str]:
+    return dt.isoformat() if dt else None
+
+
+async def _profile_to_summary(ctx, profile, user=None) -> ProfileSummaryType:
+    from repositories.user_repository import UserRepository
+    from repositories.social_repository import FollowRepository
+
+    if user is None:
+        user = await UserRepository(ctx.db).get_by_id(profile.user_id)
+
+    is_following = False
+    if ctx.current_user and user and ctx.current_user.id != user.id:
+        is_following = await FollowRepository(ctx.db).is_following(ctx.current_user.id, user.id)
+
+    return ProfileSummaryType(
+        id=profile.id,
+        username=user.username if user else "",
+        display_name=profile.display_name,
+        avatar_url=profile.avatar_url or "",
+        avatar_color=profile.avatar_color or "#00AEEF",
+        verified=profile.verified,
+        collab_score=profile.collab_score,
+        collab_count=profile.collaboration_count,
+        followers=profile.follower_count,
+        following=profile.following_count,
+        open_to_collab=profile.open_to_collab,
+        private_account=profile.private_account,
+        is_following=is_following,
+    )
+
+
+async def _post_to_content_item(
+    ctx, post, liked_ids=None, saved_ids=None, shared_ids=None,
+) -> ContentItemType:
+    from repositories.social_repository import PostInteractionRepository
+
+    viewer_id = ctx.current_user.id if ctx.current_user else None
+    interactions = PostInteractionRepository(ctx.db)
+
+    if liked_ids is not None:
+        is_liked = post.id in liked_ids
+    else:
+        is_liked = bool(viewer_id) and await interactions.has_liked(post.id, viewer_id)
+    if saved_ids is not None:
+        is_saved = post.id in saved_ids
+    else:
+        is_saved = bool(viewer_id) and await interactions.has_saved(post.id, viewer_id)
+    if shared_ids is not None:
+        is_shared = post.id in shared_ids
+    else:
+        is_shared = bool(viewer_id) and await interactions.has_shared(post.id, viewer_id)
+
+    return ContentItemType(
+        id=post.id,
+        thumbnail=post.thumbnail or "",
+        media_url=post.media_url,
+        caption=post.caption or "",
+        views=post.view_count,
+        likes=post.like_count,
+        is_liked=is_liked,
+        collab_with=post.collab_with,
+        hashtags=post.hashtags or [],
+        audio=post.audio,
+        visibility=post.visibility,
+        allow_comments=post.allow_comments,
+        allow_collabs=post.allow_collabs,
+        duration_sec=post.duration_sec,
+        comments=post.comment_count,
+        shares=post.share_count,
+        saves=post.save_count,
+        is_saved=is_saved,
+        is_shared=is_shared,
+        status=post.status.value,
+        scheduled_at=post.scheduled_at,
+    )
+
+
+async def _post_to_feed_item(ctx, post) -> FeedItemType:
+    from repositories.profile_repository import ProfileRepository
+
+    item = await _post_to_content_item(ctx, post)
+    profile = await ProfileRepository(ctx.db).get_by_user_id(post.user_id)
+    creator = await _profile_to_summary(ctx, profile) if profile else ProfileSummaryType(
+        id=post.user_id, username="", display_name=""
+    )
+    return FeedItemType(**vars(item), creator=creator)
+
+
+async def _profile_to_detail(ctx, profile) -> ProfileDetailType:
+    from repositories.user_repository import UserRepository
+    from repositories.social_repository import FollowRepository, PlaylistRepository
+    from repositories.content_repository import PostRepository
+    from app.models.content import ContentStatus
+
+    user = await UserRepository(ctx.db).get_by_id(profile.user_id)
+    follow_repo = FollowRepository(ctx.db)
+
+    is_following = False
+    if ctx.current_user and user and ctx.current_user.id != user.id:
+        is_following = await follow_repo.is_following(ctx.current_user.id, user.id)
+
+    viewer_is_owner = bool(ctx.current_user and user and ctx.current_user.id == user.id)
+    posts = await PostRepository(ctx.db).get_by_user_id(profile.user_id, limit=12)
+    if not viewer_is_owner:
+        posts = [p for p in posts if p.status == ContentStatus.PUBLISHED]
+    post_items = [await _post_to_content_item(ctx, p) for p in posts]
+
+    playlists = await PlaylistRepository(ctx.db).get_by_profile_id(profile.id)
+    playlist_items = [
+        PlaylistType(id=pl.id, title=pl.title, cover=pl.cover, item_label=pl.item_label, plays=pl.plays)
+        for pl in playlists
+    ]
+
+    return ProfileDetailType(
+        id=profile.id,
+        username=user.username if user else "",
+        display_name=profile.display_name,
+        avatar_url=profile.avatar_url or "",
+        avatar_color=profile.avatar_color or "#00AEEF",
+        bio=profile.bio,
+        location=profile.location,
+        website=profile.website_url,
+        verified=profile.verified,
+        online=profile.online,
+        collab_status=profile.collab_status,
+        collab_score=profile.collab_score,
+        collab_count=profile.collaboration_count,
+        followers=profile.follower_count,
+        following=profile.following_count,
+        open_to_collab=profile.open_to_collab,
+        private_account=profile.private_account,
+        response_time=profile.response_time,
+        posts=post_items,
+        playlists=playlist_items,
+        is_following=is_following,
+    )
+
+
+async def _profile_detail_for_user(ctx, user) -> Optional[ProfileDetailType]:
+    from repositories.profile_repository import ProfileRepository
+    from app.models.user import Profile
+
+    profile_repo = ProfileRepository(ctx.db)
+    profile = await profile_repo.get_by_user_id(user.id)
+    if not profile:
+        profile = Profile(user_id=user.id, display_name=user.username)
+        await profile_repo.create(profile)
+        await ctx.db.commit()
+    return await _profile_to_detail(ctx, profile)
+
+
+async def _search_profiles(ctx, query, after, limit, verified_only, open_to_collab) -> ProfilePageType:
+    from sqlalchemy import select, or_
+    from app.models.user import Profile, User
+
+    offset = int(after) if after else 0
+    stmt = (
+        select(Profile)
+        .join(User, Profile.user_id == User.id)
+        .where(
+            or_(User.username.ilike(f"%{query}%"), Profile.display_name.ilike(f"%{query}%")),
+            Profile.private_account.is_(False),
+        )
+    )
+    if verified_only:
+        stmt = stmt.where(Profile.verified.is_(True))
+    if open_to_collab is not None:
+        stmt = stmt.where(Profile.open_to_collab.is_(open_to_collab))
+    stmt = stmt.offset(offset).limit(limit + 1)
+
+    result = await ctx.db.execute(stmt)
+    profiles = list(result.scalars().all())
+
+    has_more = len(profiles) > limit
+    if has_more:
+        profiles = profiles[:limit]
+
+    summaries = [await _profile_to_summary(ctx, p) for p in profiles]
+    next_cursor = str(offset + limit) if has_more else None
+    return ProfilePageType(profiles=summaries, next_cursor=next_cursor)
+
+
+async def _suggested_profiles(ctx, limit) -> List[ProfileSummaryType]:
+    from sqlalchemy import select
+    from app.models.user import Profile
+    from repositories.social_repository import FollowRepository
+
+    user = ctx.require_auth()
+    following_ids = set(await FollowRepository(ctx.db).get_following_ids(user.id))
+    result = await ctx.db.execute(
+        select(Profile).where(Profile.user_id != user.id).order_by(Profile.follower_count.desc()).limit(limit + len(following_ids))
+    )
+    profiles = [p for p in result.scalars().all() if p.user_id not in following_ids][:limit]
+    return [await _profile_to_summary(ctx, p) for p in profiles]
+
+
+async def _my_following(ctx) -> List[ProfileSummaryType]:
+    from repositories.social_repository import FollowRepository
+    from repositories.profile_repository import ProfileRepository
+
+    user = ctx.require_auth()
+    following_ids = await FollowRepository(ctx.db).get_following_ids(user.id)
+    profiles = await ProfileRepository(ctx.db).get_multiple_by_user_ids(following_ids)
+    return [await _profile_to_summary(ctx, p) for p in profiles]
+
+
+async def _my_followers(ctx) -> List[ProfileSummaryType]:
+    from repositories.social_repository import FollowRepository
+    from repositories.profile_repository import ProfileRepository
+
+    user = ctx.require_auth()
+    follower_ids = await FollowRepository(ctx.db).get_follower_ids(user.id)
+    profiles = await ProfileRepository(ctx.db).get_multiple_by_user_ids(follower_ids)
+    return [await _profile_to_summary(ctx, p) for p in profiles]
+
+
+async def _following_page_for(ctx, username, after, limit) -> ProfilePageType:
+    from repositories.social_repository import FollowRepository
+    from repositories.profile_repository import ProfileRepository
+    from repositories.user_repository import UserRepository
+
+    if username:
+        target = await UserRepository(ctx.db).get_by_username(username)
+        if not target:
+            return ProfilePageType(profiles=[], next_cursor=None)
+        target_id = target.id
+    else:
+        target_id = ctx.require_auth().id
+
+    offset = int(after) if after else 0
+    all_ids = await FollowRepository(ctx.db).get_following_ids(target_id)
+    page_ids = all_ids[offset : offset + limit]
+    profiles = await ProfileRepository(ctx.db).get_multiple_by_user_ids(page_ids)
+    summaries = [await _profile_to_summary(ctx, p) for p in profiles]
+    next_cursor = str(offset + limit) if offset + limit < len(all_ids) else None
+    return ProfilePageType(profiles=summaries, next_cursor=next_cursor)
+
+
+async def _followers_page_for(ctx, username, after, limit) -> ProfilePageType:
+    from repositories.social_repository import FollowRepository
+    from repositories.profile_repository import ProfileRepository
+    from repositories.user_repository import UserRepository
+
+    if username:
+        target = await UserRepository(ctx.db).get_by_username(username)
+        if not target:
+            return ProfilePageType(profiles=[], next_cursor=None)
+        target_id = target.id
+    else:
+        target_id = ctx.require_auth().id
+
+    offset = int(after) if after else 0
+    all_ids = await FollowRepository(ctx.db).get_follower_ids(target_id)
+    page_ids = all_ids[offset : offset + limit]
+    profiles = await ProfileRepository(ctx.db).get_multiple_by_user_ids(page_ids)
+    summaries = [await _profile_to_summary(ctx, p) for p in profiles]
+    next_cursor = str(offset + limit) if offset + limit < len(all_ids) else None
+    return ProfilePageType(profiles=summaries, next_cursor=next_cursor)
+
+
+async def _my_posts(ctx) -> List[ContentItemType]:
+    from repositories.content_repository import PostRepository
+
+    user = ctx.require_auth()
+    posts = await PostRepository(ctx.db).get_by_user_id(user.id, limit=200)
+    return [await _post_to_content_item(ctx, p) for p in posts]
+
+
+async def _comments(ctx, post_id, limit) -> List[CommentGQLType]:
+    from repositories.content_repository import CommentRepository
+    from repositories.social_repository import CommentInteractionRepository
+    from repositories.profile_repository import ProfileRepository
+
+    comments = await CommentRepository(ctx.db).get_by_post_id(post_id, limit=limit)
+    viewer_id = ctx.current_user.id if ctx.current_user else None
+    interactions = CommentInteractionRepository(ctx.db)
+    liked_ids = await interactions.liked_comment_ids(viewer_id, [c.id for c in comments]) if viewer_id else set()
+
+    out = []
+    for c in comments:
+        profile = await ProfileRepository(ctx.db).get_by_user_id(c.user_id)
+        author = await _profile_to_summary(ctx, profile) if profile else ProfileSummaryType(
+            id=c.user_id, username="", display_name=""
+        )
+        out.append(CommentGQLType(
+            id=c.id,
+            text=c.body,
+            likes=c.like_count,
+            is_liked=c.id in liked_ids,
+            can_delete=bool(viewer_id and viewer_id == c.user_id),
+            can_edit=bool(viewer_id and viewer_id == c.user_id),
+            moderation_status=getattr(c, "moderation_status", "approved"),
+            created_at=_iso(c.created_at) or "",
+            author=author,
+        ))
+    return out
+
+
+async def _delete_account(ctx) -> bool:
+    user = ctx.require_auth()
+    await ctx.db.delete(user)
+    await ctx.db.commit()
+    return True
+
+
+async def _follow(ctx, username) -> FollowResultType:
+    from repositories.user_repository import UserRepository
+    from repositories.social_repository import FollowRepository
+    from repositories.profile_repository import ProfileRepository
+
+    user = ctx.require_auth()
+    target = await UserRepository(ctx.db).get_by_username(username)
+    if not target:
+        raise ValueError("Profile not found")
+    if target.id == user.id:
+        raise ValueError("You cannot follow yourself")
+
+    follow_repo = FollowRepository(ctx.db)
+    await follow_repo.follow(user.id, target.id)
+
+    profile_repo = ProfileRepository(ctx.db)
+    target_profile = await profile_repo.get_by_user_id(target.id)
+    viewer_profile = await profile_repo.get_by_user_id(user.id)
+    if target_profile:
+        target_profile.follower_count = await follow_repo.count_followers(target.id)
+    if viewer_profile:
+        viewer_profile.following_count = await follow_repo.count_following(user.id)
+    await ctx.db.commit()
+
+    return FollowResultType(
+        following=True,
+        followers=target_profile.follower_count if target_profile else 0,
+        following_count=viewer_profile.following_count if viewer_profile else 0,
+    )
+
+
+async def _unfollow(ctx, username) -> FollowResultType:
+    from repositories.user_repository import UserRepository
+    from repositories.social_repository import FollowRepository
+    from repositories.profile_repository import ProfileRepository
+
+    user = ctx.require_auth()
+    target = await UserRepository(ctx.db).get_by_username(username)
+    if not target:
+        raise ValueError("Profile not found")
+
+    follow_repo = FollowRepository(ctx.db)
+    await follow_repo.unfollow(user.id, target.id)
+
+    profile_repo = ProfileRepository(ctx.db)
+    target_profile = await profile_repo.get_by_user_id(target.id)
+    viewer_profile = await profile_repo.get_by_user_id(user.id)
+    if target_profile:
+        target_profile.follower_count = await follow_repo.count_followers(target.id)
+    if viewer_profile:
+        viewer_profile.following_count = await follow_repo.count_following(user.id)
+    await ctx.db.commit()
+
+    return FollowResultType(
+        following=False,
+        followers=target_profile.follower_count if target_profile else 0,
+        following_count=viewer_profile.following_count if viewer_profile else 0,
+    )
+
+
+async def _create_post_legacy(ctx, input) -> ContentItemType:
+    from repositories.content_repository import PostRepository
+    from app.models.content import Post, ContentType as CT, ContentStatus as CS
+
+    user = ctx.require_auth()
+    post_repo = PostRepository(ctx.db)
+
+    status = input.status or "published"
+    post = Post(
+        user_id=user.id,
+        content_type=CT.VIDEO,
+        status=CS(status),
+        caption=input.caption,
+        collab_with=input.collab_with,
+        hashtags=input.hashtags or [],
+        audio=input.audio,
+        visibility=input.visibility,
+        allow_comments=input.allow_comments,
+        allow_collabs=input.allow_collabs,
+        duration_sec=input.duration_sec,
+        scheduled_at=input.scheduled_at,
+    )
+    await post_repo.create(post)
+    await ctx.db.commit()
+    return await _post_to_content_item(ctx, post)
+
+
+async def _update_post_legacy(ctx, id, input) -> ContentItemType:
+    from repositories.content_repository import PostRepository
+    from app.models.content import ContentStatus as CS
+
+    user = ctx.require_auth()
+    post_repo = PostRepository(ctx.db)
+
+    post = await post_repo.get_by_id(id)
+    if not post:
+        raise ValueError("Post not found")
+    if post.user_id != user.id and user.role.value not in ("admin",):
+        raise PermissionError("Only the post author can update this post")
+
+    for field in (
+        "caption", "collab_with", "hashtags", "audio", "visibility",
+        "allow_comments", "allow_collabs", "duration_sec", "scheduled_at",
+    ):
+        value = getattr(input, field, None)
+        if value is not None:
+            setattr(post, field, value)
+    if input.status is not None:
+        post.status = CS(input.status)
+
+    post.updated_at = datetime.now(timezone.utc)
+    await post_repo.update(post)
+    await ctx.db.commit()
+    return await _post_to_content_item(ctx, post)
+
+
+async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
+    from repositories.content_repository import PostRepository
+    from repositories.social_repository import PostInteractionRepository
+
+    user = ctx.require_auth()
+    post_repo = PostRepository(ctx.db)
+    interactions = PostInteractionRepository(ctx.db)
+
+    post = await post_repo.get_by_id(id)
+    if not post:
+        raise ValueError("Post not found")
+
+    is_liked = await interactions.has_liked(id, user.id)
+    if like and not is_liked:
+        await interactions.toggle_like(id, user.id)
+    elif not like and is_liked:
+        await interactions.toggle_like(id, user.id)
+
+    post.like_count = await interactions.count_likes(id)
+    await ctx.db.commit()
+    return LikeResultType(liked=like, likes=post.like_count)
+
+
+async def _save_post_legacy(ctx, id, save: bool) -> SaveResultType:
+    from repositories.content_repository import PostRepository
+    from repositories.social_repository import PostInteractionRepository
+
+    user = ctx.require_auth()
+    post_repo = PostRepository(ctx.db)
+    interactions = PostInteractionRepository(ctx.db)
+
+    post = await post_repo.get_by_id(id)
+    if not post:
+        raise ValueError("Post not found")
+
+    is_saved = await interactions.has_saved(id, user.id)
+    if save and not is_saved:
+        await interactions.toggle_save(id, user.id)
+    elif not save and is_saved:
+        await interactions.toggle_save(id, user.id)
+
+    post.save_count = await interactions.count_saves(id)
+    await ctx.db.commit()
+    return SaveResultType(saved=save, saves=post.save_count)
+
+
+async def _share_post_legacy(ctx, id) -> ShareResultType:
+    from repositories.content_repository import PostRepository
+    from repositories.social_repository import PostInteractionRepository
+
+    user = ctx.require_auth()
+    post_repo = PostRepository(ctx.db)
+    interactions = PostInteractionRepository(ctx.db)
+
+    post = await post_repo.get_by_id(id)
+    if not post:
+        raise ValueError("Post not found")
+
+    await interactions.add_share(id, user.id)
+    post.share_count = await interactions.count_shares(id)
+    await ctx.db.commit()
+    return ShareResultType(shares=post.share_count, shared=True)
+
+
+async def _track_post_watch(ctx, post_id, watched_seconds, completed) -> WatchResultType:
+    from repositories.content_repository import PostRepository
+    from repositories.social_repository import PostInteractionRepository
+
+    user = ctx.require_auth()
+    post_repo = PostRepository(ctx.db)
+    interactions = PostInteractionRepository(ctx.db)
+
+    post = await post_repo.get_by_id(post_id)
+    if not post:
+        raise ValueError("Post not found")
+
+    clamped_seconds = max(0.0, min(watched_seconds, post.duration_sec)) if post.duration_sec else watched_seconds
+    verified_completed = completed and post.duration_sec > 0 and clamped_seconds >= 0.9 * post.duration_sec
+
+    watch = await interactions.track_watch(post_id, user.id, clamped_seconds, verified_completed)
+    post.view_count = await interactions.count_views(post_id)
+    await ctx.db.commit()
+
+    return WatchResultType(
+        views=post.view_count,
+        watched_seconds=watch.watched_seconds,
+        completed=watch.completed,
+        rewatched=watch.rewatched,
+    )
+
+
+async def _add_comment(ctx, post_id, text) -> CommentGQLType:
+    from repositories.content_repository import PostRepository, CommentRepository
+    from repositories.profile_repository import ProfileRepository
+    from app.models.content import Comment
+
+    user = ctx.require_auth()
+    post_repo = PostRepository(ctx.db)
+    comment_repo = CommentRepository(ctx.db)
+
+    post = await post_repo.get_by_id(post_id)
+    if not post:
+        raise ValueError("Post not found")
+    if not post.allow_comments:
+        raise PermissionError("Comments are disabled for this post")
+
+    comment = Comment(post_id=post_id, user_id=user.id, body=text)
+    await comment_repo.create(comment)
+    post.comment_count += 1
+    await ctx.db.commit()
+
+    profile = await ProfileRepository(ctx.db).get_by_user_id(user.id)
+    author = await _profile_to_summary(ctx, profile) if profile else ProfileSummaryType(
+        id=user.id, username=user.username, display_name=user.username
+    )
+    return CommentGQLType(
+        id=comment.id, text=comment.body, likes=0, is_liked=False,
+        can_delete=True, can_edit=True, moderation_status="approved",
+        created_at=_iso(comment.created_at) or "", author=author,
+    )
+
+
+async def _edit_comment(ctx, id, text) -> CommentGQLType:
+    from repositories.content_repository import CommentRepository
+    from repositories.profile_repository import ProfileRepository
+
+    user = ctx.require_auth()
+    comment_repo = CommentRepository(ctx.db)
+
+    comment = await comment_repo.get_by_id(id)
+    if not comment:
+        raise ValueError("Comment not found")
+    if comment.user_id != user.id:
+        raise PermissionError("Only the comment author can edit it")
+
+    comment.body = text
+    comment.is_edited = True
+    await ctx.db.commit()
+
+    profile = await ProfileRepository(ctx.db).get_by_user_id(user.id)
+    author = await _profile_to_summary(ctx, profile) if profile else ProfileSummaryType(
+        id=user.id, username=user.username, display_name=user.username
+    )
+    return CommentGQLType(
+        id=comment.id, text=comment.body, likes=comment.like_count, is_liked=False,
+        can_delete=True, can_edit=True, moderation_status="approved",
+        created_at=_iso(comment.created_at) or "", author=author,
+    )
+
+
+async def _delete_comment_legacy(ctx, id) -> bool:
+    from repositories.content_repository import CommentRepository, PostRepository
+
+    user = ctx.require_auth()
+    comment_repo = CommentRepository(ctx.db)
+
+    comment = await comment_repo.get_by_id(id)
+    if not comment:
+        return False
+    if comment.user_id != user.id and user.role.value not in ("admin",):
+        raise PermissionError("Only the comment author can delete it")
+
+    success = await comment_repo.soft_delete(id)
+    if success:
+        post = await PostRepository(ctx.db).get_by_id(comment.post_id)
+        if post and post.comment_count > 0:
+            post.comment_count -= 1
+        await ctx.db.commit()
+    return success
+
+
+async def _like_comment_legacy(ctx, id, like: bool) -> LikeResultType:
+    from repositories.content_repository import CommentRepository
+    from repositories.social_repository import CommentInteractionRepository
+
+    user = ctx.require_auth()
+    comment_repo = CommentRepository(ctx.db)
+    interactions = CommentInteractionRepository(ctx.db)
+
+    comment = await comment_repo.get_by_id(id)
+    if not comment:
+        raise ValueError("Comment not found")
+
+    is_liked = await interactions.has_liked(id, user.id)
+    if like and not is_liked:
+        await interactions.toggle_like(id, user.id)
+    elif not like and is_liked:
+        await interactions.toggle_like(id, user.id)
+
+    comment.like_count = await interactions.count_likes(id)
+    await ctx.db.commit()
+    return LikeResultType(liked=like, likes=comment.like_count)
+
+
+async def _report_comment(ctx, id, reason) -> bool:
+    """Best-effort moderation flag — logged for follow-up; no report table wired yet."""
+    ctx.require_auth()
+    return True
+
+
 # ── Error Handling Extension ─────────────────────────────────────────────────
 
 
@@ -3556,8 +4570,10 @@ class ConnextionZErrorExtension(strawberry.extensions.SchemaExtension):
     def on_execute(self):
         yield
         # After execution, check for errors and enrich them
-        if self.execution_context.errors:
-            for error in self.execution_context.errors:
+        result = self.execution_context.result
+        errors = result.errors if result is not None else None
+        if errors:
+            for error in errors:
                 # Add request ID if available
                 if hasattr(self.execution_context, "request_id"):
                     error.extensions = error.extensions or {}
@@ -3635,6 +4651,6 @@ def create_graphql_router(
     return GraphQLRouter[AppContext](
         schema,
         context_getter=get_context,
-        graphiql=True,
+        graphql_ide="graphiql",
         subscription_protocols=["graphql-ws"],
     )

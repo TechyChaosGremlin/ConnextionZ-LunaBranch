@@ -30,6 +30,7 @@ import app.models.reputation  # noqa: E402, F401
 import app.models.embedding  # noqa: E402, F401
 import app.models.notification  # noqa: E402, F401
 import app.models.messaging  # noqa: E402, F401
+import app.models.social  # noqa: E402, F401
 
 # ── Database URL ─────────────────────────────────────────────────
 # Prefer DATABASE_URL from environment; fall back to alembic.ini [alembic] sqlalchemy.url

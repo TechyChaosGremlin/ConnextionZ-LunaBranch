@@ -14,6 +14,7 @@ from app.models import reputation  # noqa: F401
 from app.models import embedding  # noqa: F401
 from app.models import notification  # noqa: F401
 from app.models import messaging  # noqa: F401
+from app.models import social  # noqa: F401
 
 __all__ = [
     "Base",

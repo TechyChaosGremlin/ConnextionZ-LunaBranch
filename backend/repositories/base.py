@@ -7,7 +7,7 @@ common CRUD operations using SQLAlchemy async sessions.
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar, Type, Optional, list
+from typing import Generic, TypeVar, Type, Optional
 from uuid import UUID
 
 from sqlalchemy import select, func, update, delete

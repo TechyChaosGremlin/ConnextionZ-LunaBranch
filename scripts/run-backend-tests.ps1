@@ -1,6 +1,6 @@
 param(
   [string]$Python = "",
-  [string[]]$PytestArgs = @("backend", "-q"),
+  [string[]]$PytestArgs = @("backend/tests", "-q"),
   [string]$DatabaseUrl = "sqlite:///./test-review.db",
   [switch]$KeepServer
 )
@@ -20,7 +20,7 @@ if (-not $Python) {
 function Test-ApiReady {
   try {
     $response = Invoke-RestMethod -Uri "http://127.0.0.1:8002/health" -Method Get -TimeoutSec 2
-    return $response.status -eq "ok"
+    return $response.status -eq "healthy"
   } catch {
     return $false
   }
@@ -34,7 +34,7 @@ if (-not (Test-ApiReady)) {
   $env:RATE_LIMIT_ENABLED = "false"
   $env:DATABASE_URL = $DatabaseUrl
 
-  $serverProcess = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "backend.app.main:app", "--host", "127.0.0.1", "--port", "8002") -WorkingDirectory $repoRoot -PassThru
+  $serverProcess = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", "8002") -WorkingDirectory (Join-Path $repoRoot "backend") -PassThru
 
   $startedServer = $true
 

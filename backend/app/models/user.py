@@ -125,6 +125,16 @@ class Profile(Base, TimestampMixin, SoftDeleteMixin):
     collaboration_count: Mapped[int] = mapped_column(default=0, nullable=False)
     total_likes: Mapped[int] = mapped_column(default=0, nullable=False)
 
+    # ── Ported from legacy Profile (kept for frontend compatibility) ──
+    avatar_color: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    verified: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    online: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    collab_status: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    collab_score: Mapped[float] = mapped_column(default=0.0, nullable=False)
+    open_to_collab: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    private_account: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    response_time: Mapped[str] = mapped_column(String(50), default="< 4 hours", nullable=False)
+
     # Relationships
     user: Mapped["User"] = relationship("User", back_populates="profile")
 

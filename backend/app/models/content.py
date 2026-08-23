@@ -33,6 +33,7 @@ class ContentStatus(str, enum.Enum):
     ARCHIVED = "archived"
     FLAGGED = "flagged"
     REMOVED = "removed"
+    SCHEDULED = "scheduled"
 
 
 # ── Post ─────────────────────────────────────────────────────────
@@ -75,6 +76,7 @@ class Post(Base, TimestampMixin, SoftDeleteMixin):
     comment_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     share_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     view_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    save_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
 
     # Scheduling
     scheduled_at: Mapped[str | None] = mapped_column(
@@ -82,6 +84,20 @@ class Post(Base, TimestampMixin, SoftDeleteMixin):
     )
     published_at: Mapped[str | None] = mapped_column(
         String(64), nullable=True  # ISO 8601
+    )
+
+    # ── Ported from legacy Post (kept for frontend compatibility) ──
+    thumbnail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    media_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    hashtags: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    audio: Mapped[str] = mapped_column(String(255), default="Original Sound", nullable=False)
+    visibility: Mapped[str] = mapped_column(String(20), default="public", nullable=False)
+    allow_comments: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    allow_collabs: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    duration_sec: Mapped[float] = mapped_column(default=0.0, nullable=False)
+    collab_with: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    moderation_status: Mapped[str] = mapped_column(
+        String(20), default="approved", nullable=False, index=True
     )
 
     # Relationships
@@ -128,6 +144,11 @@ class Comment(Base, TimestampMixin, SoftDeleteMixin):
 
     # Metrics
     like_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+    # ── Ported from legacy Comment (kept for frontend compatibility) ──
+    moderation_status: Mapped[str] = mapped_column(
+        String(20), default="approved", nullable=False, index=True
+    )
 
     # Relationships
     post: Mapped["Post"] = relationship("Post", back_populates="comments")

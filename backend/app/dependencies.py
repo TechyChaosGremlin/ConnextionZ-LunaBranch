@@ -14,9 +14,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.db.session import async_session_factory
 
-# Type alias for FastAPI dependency
-AsyncSessionDep = Depends(get_db_session)
-
 
 async def get_db_session() -> AsyncIterator[AsyncSession]:
     """
@@ -39,3 +36,7 @@ async def get_db_session() -> AsyncIterator[AsyncSession]:
             raise
         finally:
             await session.close()
+
+
+# Type alias for FastAPI dependency
+AsyncSessionDep = Depends(get_db_session)
