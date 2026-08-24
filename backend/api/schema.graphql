@@ -981,14 +981,6 @@ type Query {
   """
   liveStream(id: UUID!): LiveStream
 
-  # ---- Trending Sounds (Feature 8) ----
-  """
-  Currently trending sounds.
-  """
-  trendingSounds(
-    limit: Int = 20
-  ): [Sound!]!
-
   # ---- Creator Discovery (Feature 9) ----
   """
   Discover creators matching tags, interests, or free-text query.
@@ -1001,21 +993,6 @@ type Query {
     first: Int = 20
     after: String
   ): CreatorCardConnection!
-
-  # ---- Brand Partnerships (Feature 10) ----
-  """
-  Browse brand partnership opportunities.
-  """
-  brandOpportunities(
-    status: CollaborationStatus
-    first: Int = 20
-    after: String
-  ): BrandOpportunityConnection!
-
-  """
-  Get a specific brand opportunity.
-  """
-  brandOpportunity(id: UUID!): BrandOpportunity
 
   # ---- Search (Feature 12) ----
   """
@@ -1201,36 +1178,3 @@ type Mutation {
   reportContent(input: ReportContentInput!): Report!
 }
 
-# ── Root Subscription ────────────────────────────────────────────────────────
-
-type Subscription {
-  """
-  Real-time feed updates when new posts are created.
-  """
-  feedUpdated: Post!
-
-  """
-  Real-time collaboration status changes.
-  """
-  collaborationUpdated(collaborationId: UUID!): Collaboration!
-
-  """
-  New message received in any conversation the user participates in.
-  """
-  messageReceived: Message!
-
-  """
-  New notification for the authenticated user.
-  """
-  notificationReceived: Notification!
-
-  """
-  Badge earned by the authenticated user.
-  """
-  badgeEarned: UserBadge!
-
-  """
-  Live stream status changes for a specific stream.
-  """
-  liveStreamUpdated(liveStreamId: UUID!): LiveStream!
-}

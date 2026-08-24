@@ -10,10 +10,11 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import select, func
+from sqlalchemy import case, desc, func, or_, select, String, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.content import Post, Comment, Media, ContentType, ContentStatus
+from app.models.user import Profile, User
 from repositories.base import BaseRepository
 
 
@@ -157,6 +158,85 @@ class PostRepository(BaseRepository[Post]):
             select(func.count()).select_from(Post).where(Post.deleted_at.is_(None))
         )
         return result.scalar_one()
+
+    async def search_by_content(
+        self, query: str, limit: int = 20, offset: int = 0
+    ) -> list[tuple[Post, Profile, float]]:
+        """
+        Search posts by caption, hashtags, audio, or creator with relevance ranking.
+        
+        Ranking algorithm (via SQL case expression):
+        - Caption prefix match: 30
+        - Caption contains match: 15
+        - Hashtags contains: 25
+        - Audio contains: 10
+        - Profile (username/display_name) contains: 20
+        
+        Results sorted by: rank_score DESC, view_count DESC, id DESC
+
+        Args:
+            query: Search query string
+            limit: Maximum number of results
+            offset: Number of results to skip
+
+        Returns:
+            List of (Post, Profile, rank_score) tuples sorted by relevance
+        """
+        terms = [term for term in query.strip().split() if term]
+        if not terms:
+            return []
+
+        # Build patterns for matching
+        contains_pattern = "%" + "%".join(terms) + "%"
+        prefix_pattern = terms[0] + "%"
+
+        # Build rank score using SQL case expression
+        rank_score = (
+            case((Post.caption.ilike(prefix_pattern), 30), else_=0)
+            + case((Post.caption.ilike(contains_pattern), 15), else_=0)
+            + case((cast(Post.hashtags, String).ilike(contains_pattern), 25), else_=0)
+            + case((Post.audio.ilike(contains_pattern), 10), else_=0)
+            + case(
+                (
+                    or_(
+                        User.username.ilike(contains_pattern),
+                        Profile.display_name.ilike(contains_pattern),
+                    ),
+                    20,
+                ),
+                else_=0,
+            )
+        )
+
+        # Build filters: at least one term must match in caption, hashtags, audio, or profile
+        filters = []
+        for term in terms:
+            pattern = f"%{term}%"
+            filters.append(
+                or_(
+                    Post.caption.ilike(pattern),
+                    Post.audio.ilike(pattern),
+                    cast(Post.hashtags, String).ilike(pattern),
+                    User.username.ilike(pattern),
+                    Profile.display_name.ilike(pattern),
+                )
+            )
+
+        # Build the query
+        stmt = (
+            select(Post, Profile, rank_score.label("rank_score"))
+            .join(Profile, Post.user_id == Profile.user_id)
+            .join(User, Profile.user_id == User.id)
+            .where(*filters)
+            .where(Post.deleted_at.is_(None))
+            .where(Post.status == ContentStatus.PUBLISHED)
+            .order_by(desc("rank_score"), Post.view_count.desc(), Post.id.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+
+        result = await self.db.execute(stmt)
+        return [(post, profile, score) for post, profile, score in result.all()]
 
 
 class CommentRepository(BaseRepository[Comment]):

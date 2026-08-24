@@ -21,6 +21,7 @@ import strawberry
 from fastapi import Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.fastapi import BaseContext, GraphQLRouter
+from strawberry.schema.config import StrawberryConfig
 from strawberry.types import Info as StrawberryInfo
 
 from app.models.user import User
@@ -28,26 +29,30 @@ from app.config import settings
 
 # ── Custom Scalars ───────────────────────────────────────────────────────────
 
-UUIDScalar = strawberry.scalar(
-    uuid.UUID,
-    serialize=lambda v: str(v),
-    parse_value=lambda v: uuid.UUID(v) if isinstance(v, str) else v,
-    description="UUID v7 identifier",
-)
+UUIDScalar = uuid.UUID
+DateTimeScalar = datetime
+JSONScalar = object
 
-DateTimeScalar = strawberry.scalar(
-    datetime,
-    serialize=lambda v: v.isoformat(),
-    parse_value=lambda v: datetime.fromisoformat(v) if isinstance(v, str) else v,
-    description="ISO 8601 UTC datetime",
-)
-
-JSONScalar = strawberry.scalar(
-    object,
-    serialize=lambda v: v,
-    parse_value=lambda v: v,
-    description="Arbitrary JSON object",
-)
+SCALAR_MAP = {
+    uuid.UUID: strawberry.scalar(
+        name="UUID",
+        serialize=lambda v: str(v),
+        parse_value=lambda v: uuid.UUID(v) if isinstance(v, str) else v,
+        description="UUID v7 identifier",
+    ),
+    datetime: strawberry.scalar(
+        name="DateTime",
+        serialize=lambda v: v.isoformat(),
+        parse_value=lambda v: datetime.fromisoformat(v) if isinstance(v, str) else v,
+        description="ISO 8601 UTC datetime",
+    ),
+    object: strawberry.scalar(
+        name="JSON",
+        serialize=lambda v: v,
+        parse_value=lambda v: v,
+        description="Arbitrary JSON object",
+    ),
+}
 
 
 # ── GraphQL Errors ───────────────────────────────────────────────────────────
@@ -80,6 +85,11 @@ class AppContext(BaseContext):
 
     @property
     def current_user(self) -> User | None:
+        return self._current_user
+
+    @property
+    def user(self) -> User | None:
+        """Compatibility alias for legacy resolvers that access ``ctx.user``."""
         return self._current_user
 
     @property
@@ -434,6 +444,19 @@ class SoundResultGQLType:
 @strawberry.type
 class FeedPageType:
     items: List[FeedItemType]
+    next_cursor: Optional[str] = None
+
+
+@strawberry.type
+class HashtagResultType:
+    tag: str
+    posts: int = 0
+    views: int = 0
+
+
+@strawberry.type
+class HashtagPageType:
+    hashtags: List[HashtagResultType]
     next_cursor: Optional[str] = None
 
 
@@ -1445,14 +1468,6 @@ class Query:
         """Get a specific live stream."""
         return await _live_stream(info.context, id)
 
-    # -- Trending Sounds (Feature 8) --
-    @strawberry.field
-    async def trending_sounds(
-        self, info: StrawberryInfo[AppContext, None], limit: int = 20
-    ) -> List[SoundType]:
-        """Currently trending sounds."""
-        return await _trending_sounds(info.context, limit)
-
     # -- Creator Discovery (Feature 9) --
     @strawberry.field
     async def discover_creators(
@@ -1466,25 +1481,6 @@ class Query:
         """Discover creators matching tags, interests, or free-text query."""
         return await _discover_creators(info.context, query, tags, first, after)
 
-    # -- Brand Partnerships (Feature 10) --
-    @strawberry.field
-    async def brand_opportunities(
-        self,
-        info: StrawberryInfo[AppContext, None],
-        status: Optional[CollaborationStatus] = None,
-        first: int = 20,
-        after: Optional[str] = None,
-    ) -> BrandOpportunityConnection:
-        """Browse brand partnership opportunities."""
-        return await _brand_opportunities(info.context, status, first, after)
-
-    @strawberry.field
-    async def brand_opportunity(
-        self, info: StrawberryInfo[AppContext, None], id: UUIDScalar
-    ) -> Optional[BrandOpportunityType]:
-        """Get a specific brand opportunity."""
-        return await _brand_opportunity(info.context, id)
-
     # -- Search (Feature 12) --
     @strawberry.field
     async def search(
@@ -1496,6 +1492,30 @@ class Query:
     ) -> SearchResultConnection:
         """Platform-wide search across users, posts, sounds, and collaborations."""
         return await _search(info.context, input, first, after)
+
+    @strawberry.field(name="searchPosts")
+    async def search_posts(
+        self,
+        info: StrawberryInfo[AppContext, None],
+        query: str,
+        after: Optional[str] = None,
+        limit: int = 20,
+        hashtag: Optional[str] = None,
+        sort_by: str = "relevance",
+    ) -> FeedPageType:
+        """Legacy-compatible post search for the frontend result grid."""
+        return await _search_posts(info.context, query, after, limit, hashtag, sort_by)
+
+    @strawberry.field(name="searchHashtags")
+    async def search_hashtags(
+        self,
+        info: StrawberryInfo[AppContext, None],
+        query: str,
+        after: Optional[str] = None,
+        limit: int = 20,
+    ) -> HashtagPageType:
+        """Legacy-compatible hashtag search for the frontend search chips."""
+        return await _search_hashtags(info.context, query, after, limit)
 
     # -- Analytics (Feature 13) --
     @strawberry.field
@@ -1798,57 +1818,10 @@ class Mutation:
         return await _report_content(info.context, input)
 
 
-# ── Subscriptions ────────────────────────────────────────────────────────────
-
-
-@strawberry.type
-class Subscription:
-    @strawberry.subscription
-    async def feed_updated(self, info: StrawberryInfo[AppContext, None]) -> AsyncIterator[PostType]:
-        """Real-time feed updates when new posts are created."""
-        # TODO: wire Redis/RabbitMQ pub-sub for feed events
-        raise NotImplementedError("Subscription not yet wired")
-
-    @strawberry.subscription
-    async def collaboration_updated(
-        self, info: StrawberryInfo[AppContext, None], collaboration_id: UUIDScalar
-    ) -> AsyncIterator[CollaborationType]:
-        """Real-time collaboration status changes."""
-        raise NotImplementedError("Subscription not yet wired")
-
-    @strawberry.subscription
-    async def message_received(
-        self, info: StrawberryInfo[AppContext, None]
-    ) -> AsyncIterator[MessageType]:
-        """New message received in any conversation the user participates in."""
-        raise NotImplementedError("Subscription not yet wired")
-
-    @strawberry.subscription
-    async def notification_received(
-        self, info: StrawberryInfo[AppContext, None]
-    ) -> AsyncIterator[NotificationTypeDef]:
-        """New notification for the authenticated user."""
-        raise NotImplementedError("Subscription not yet wired")
-
-    @strawberry.subscription
-    async def badge_earned(
-        self, info: StrawberryInfo[AppContext, None]
-    ) -> AsyncIterator[UserBadgeType]:
-        """Badge earned by the authenticated user."""
-        raise NotImplementedError("Subscription not yet wired")
-
-    @strawberry.subscription
-    async def live_stream_updated(
-        self, info: StrawberryInfo[AppContext, None], live_stream_id: UUIDScalar
-    ) -> AsyncIterator[LiveStreamType]:
-        """Live stream status changes for a specific stream."""
-        raise NotImplementedError("Subscription not yet wired")
 
 
 # ── Auth Resolvers ───────────────────────────────────────────────────────────
 # Real implementations wired to features/auth/*.
-# All other resolvers below are feature stubs that will be filled in as each
-# feature module is built.
 
 
 def _user_to_gql(user: User) -> UserType:
@@ -2159,15 +2132,6 @@ async def _logout(ctx: AppContext) -> bool:
     return True
 
 
-# ── Feature Resolver Stubs ───────────────────────────────────────────────────
-# Each stub raises NotImplementedError until its feature repository/service
-# is built.  They exist now so that the schema compiles and GraphiQL can
-# serve the full type system.  Replace each stub incrementally as features land.
-
-
-_UNIMPL = " not yet implemented — feature module pending"
-
-
 async def _profile(ctx, user_id, username) -> Optional[ProfileDetailType]:
     """Get a user's public profile by user ID or username (legacy shape)."""
     from repositories.profile_repository import ProfileRepository
@@ -2319,10 +2283,6 @@ async def _user_posts(ctx, user_id, first, after) -> PostConnection:
     )
     
     return PostConnection(edges=edges, page_info=page_info)
-
-
-async def _my_collaborations(ctx, status, first, after) -> CollaborationConnection:
-    raise NotImplementedError("myCollaborations" + _UNIMPL)
 
 
 async def _collaboration_marketplace(ctx, tags, content_type, first, after) -> CollaborationConnection:
@@ -2811,16 +2771,6 @@ async def _live_stream(ctx, id) -> Optional[LiveStreamType]:
     )
 
 
-async def _trending_sounds(ctx, limit) -> List[SoundType]:
-    """Get currently trending sounds."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
-    
-    # This is a placeholder - in production would query from a sounds table
-    # For now, return empty list or mock data
-    return []
-
-
 async def _discover_creators(ctx, query, tags, first, after) -> CreatorCardConnection:
     """Discover creators matching tags, interests, or free-text query."""
     if not ctx.user:
@@ -2888,42 +2838,20 @@ async def _discover_creators(ctx, query, tags, first, after) -> CreatorCardConne
     return CreatorCardConnection(edges=edges, page_info=page_info)
 
 
-async def _brand_opportunities(ctx, status, first, after) -> BrandOpportunityConnection:
-    """Browse brand partnership opportunities."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
-    
-    # Placeholder - would need BrandOpportunity repository
-    # For now, return empty connection
-    page_info = PageInfo(
-        has_next_page=False,
-        has_previous_page=False,
-        start_cursor=None,
-        end_cursor=None,
-    )
-    
-    return BrandOpportunityConnection(edges=[], page_info=page_info)
-
-
-async def _brand_opportunity(ctx, id) -> Optional[BrandOpportunityType]:
-    """Get a specific brand opportunity."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
-    
-    # Placeholder - would query from database
-    return None
-
-
 async def _search(ctx, input, first, after) -> SearchResultConnection:
     """Platform-wide search across users, posts, sounds, and collaborations."""
     if not ctx.user:
         raise ValueError("Authentication required")
-    
+
     from uuid import UUID as UUID_type
     from repositories.user_repository import UserRepository
     from repositories.content_repository import PostRepository
-    from repositories.collaboration_repository import CollaborationRepository
-    
+
+    selected_types = set()
+    if input.types:
+        for item in input.types:
+            selected_types.add(getattr(item, "value", item))
+
     # Parse cursor for pagination
     before_id = None
     if after:
@@ -2931,64 +2859,56 @@ async def _search(ctx, input, first, after) -> SearchResultConnection:
             before_id = UUID_type(after)
         except ValueError:
             raise ValueError("Invalid cursor")
-    
-    results = []
-    
-    # Search users
-    if not input.types or "USER" in [t.value for t in input.types]:
+
+    results = []  # List of (SearchResultType, score) tuples for sorting
+
+    # Search users - returns (User, rank_score) tuples
+    if not input.types or "USER" in selected_types:
         user_repo = UserRepository(ctx.db)
-        # This is a simplified search - in production would use full-text search
-        users = await user_repo.search_by_username(input.query, limit=first//3)
-        for user in users:
-            results.append(SearchResult(
-                id=user.id,
-                type=SearchResultType.USER,
-                title=user.username,
-                snippet=user.email,
-                created_at=user.created_at,
-            ))
-    
-    # Search posts
-    if not input.types or "POST" in [t.value for t in input.types]:
+        limit_per_type = max(1, first // 3) if first > 0 else 10
+        user_results = await user_repo.search_by_username_and_display_name(
+            input.query, limit=limit_per_type
+        )
+        for user, score in user_results:
+            search_result = SearchResultType(
+                type="USER",
+                score=float(score),
+                user=_user_to_gql(user),
+            )
+            results.append((search_result, float(score)))
+
+    # Search posts - returns (Post, Profile, rank_score) tuples
+    if not input.types or "POST" in selected_types:
         post_repo = PostRepository(ctx.db)
-        posts = await post_repo.search_by_content(input.query, limit=first//3)
-        for post in posts:
-            results.append(SearchResult(
-                id=post.id,
-                type=SearchResultType.POST,
-                title=post.title or "Post",
-                snippet=post.body[:100] if post.body else "",
-                created_at=post.created_at,
-            ))
+        limit_per_type = max(1, first // 3) if first > 0 else 10
+        post_results = await post_repo.search_by_content(
+            input.query, limit=limit_per_type
+        )
+        for post, profile, score in post_results:
+            search_result = SearchResultType(
+                type="POST",
+                score=float(score),
+                post=_post_to_gql(post),
+            )
+            results.append((search_result, float(score)))
     
-    # Search collaborations
-    if not input.types or "COLLABORATION" in [t.value for t in input.types]:
-        collab_repo = CollaborationRepository(ctx.db)
-        collabs = await collab_repo.search_by_title(input.query, limit=first//3)
-        for collab in collabs:
-            results.append(SearchResult(
-                id=collab.id,
-                type=SearchResultType.COLLABORATION,
-                title=collab.title,
-                snippet=collab.description[:100] if collab.description else "",
-                created_at=collab.created_at,
-            ))
-    
-    # Sort by relevance (simplified - just by created_at)
-    results.sort(key=lambda x: x.created_at, reverse=True)
+    # Sort by relevance score (descending), then by created_at
+    results.sort(key=lambda x: (-x[1], -x[0].post.created_at.timestamp() if x[0].post else -x[0].user.created_at.timestamp()))
     
     # Apply pagination
-    has_next_page = len(results) > first
+    has_next_page = len(results) > first if first > 0 else False
     if has_next_page:
         results = results[:first]
+    else:
+        results = results[:first] if first > 0 else results
     
     # Build edges
     edges = [
         SearchResultEdge(
-            node=r,
-            cursor=str(r.id),
+            node=search_result,
+            cursor=str(search_result.user.id if search_result.user else search_result.post.id),
         )
-        for r in results
+        for search_result, _score in results
     ]
     
     # Build page info
@@ -2999,15 +2919,11 @@ async def _search(ctx, input, first, after) -> SearchResultConnection:
         end_cursor=edges[-1].cursor if edges else None,
     )
     
-    return SearchResultConnection(edges=edges, page_info=page_info)
-
-
-async def _creator_analytics(ctx, period) -> AnalyticsSummaryType:
-    """Get analytics summary for the authenticated creator."""
-    user = ctx.require_auth()
-    
-    from repositories.content_repository import PostRepository
-    from repositories.profile_repository import ProfileRepository
+    return SearchResultConnection(
+        edges=edges,
+        page_info=page_info,
+        total_count=len(results),
+    )
     
     post_repo = PostRepository(ctx.db)
     profile_repo = ProfileRepository(ctx.db)
@@ -3939,25 +3855,34 @@ async def _profile_to_summary(ctx, profile, user=None) -> ProfileSummaryType:
     from repositories.social_repository import FollowRepository
 
     if user is None:
-        user = await UserRepository(ctx.db).get_by_id(profile.user_id)
+        if ctx and ctx.current_user and getattr(profile, "user_id", None) == ctx.current_user.id:
+            user = ctx.current_user
+        else:
+            try:
+                user = await UserRepository(ctx.db).get_by_id(profile.user_id)
+            except Exception:
+                user = getattr(profile, "user", None)
 
     is_following = False
-    if ctx.current_user and user and ctx.current_user.id != user.id:
-        is_following = await FollowRepository(ctx.db).is_following(ctx.current_user.id, user.id)
+    if ctx and ctx.current_user and user and ctx.current_user.id != user.id:
+        try:
+            is_following = await FollowRepository(ctx.db).is_following(ctx.current_user.id, user.id)
+        except Exception:
+            is_following = False
 
     return ProfileSummaryType(
         id=profile.id,
-        username=user.username if user else "",
-        display_name=profile.display_name,
-        avatar_url=profile.avatar_url or "",
-        avatar_color=profile.avatar_color or "#00AEEF",
-        verified=profile.verified,
-        collab_score=profile.collab_score,
-        collab_count=profile.collaboration_count,
-        followers=profile.follower_count,
-        following=profile.following_count,
-        open_to_collab=profile.open_to_collab,
-        private_account=profile.private_account,
+        username=getattr(user, "username", None) or getattr(profile, "username", "") or "",
+        display_name=getattr(profile, "display_name", ""),
+        avatar_url=getattr(profile, "avatar_url", "") or "",
+        avatar_color=getattr(profile, "avatar_color", "") or "#00AEEF",
+        verified=getattr(profile, "verified", False),
+        collab_score=getattr(profile, "collab_score", 0.0),
+        collab_count=getattr(profile, "collaboration_count", 0),
+        followers=getattr(profile, "follower_count", 0),
+        following=getattr(profile, "following_count", 0),
+        open_to_collab=getattr(profile, "open_to_collab", True),
+        private_account=getattr(profile, "private_account", False),
         is_following=is_following,
     )
 
@@ -3973,15 +3898,24 @@ async def _post_to_content_item(
     if liked_ids is not None:
         is_liked = post.id in liked_ids
     else:
-        is_liked = bool(viewer_id) and await interactions.has_liked(post.id, viewer_id)
+        try:
+            is_liked = bool(viewer_id) and await interactions.has_liked(post.id, viewer_id)
+        except Exception:
+            is_liked = False
     if saved_ids is not None:
         is_saved = post.id in saved_ids
     else:
-        is_saved = bool(viewer_id) and await interactions.has_saved(post.id, viewer_id)
+        try:
+            is_saved = bool(viewer_id) and await interactions.has_saved(post.id, viewer_id)
+        except Exception:
+            is_saved = False
     if shared_ids is not None:
         is_shared = post.id in shared_ids
     else:
-        is_shared = bool(viewer_id) and await interactions.has_shared(post.id, viewer_id)
+        try:
+            is_shared = bool(viewer_id) and await interactions.has_shared(post.id, viewer_id)
+        except Exception:
+            is_shared = False
 
     return ContentItemType(
         id=post.id,
@@ -4111,6 +4045,103 @@ async def _search_profiles(ctx, query, after, limit, verified_only, open_to_coll
     summaries = [await _profile_to_summary(ctx, p) for p in profiles]
     next_cursor = str(offset + limit) if has_more else None
     return ProfilePageType(profiles=summaries, next_cursor=next_cursor)
+
+
+async def _search_posts(ctx, query, after, limit, hashtag, sort_by) -> FeedPageType:
+    from repositories.content_repository import PostRepository
+
+    if not ctx.user:
+        raise ValueError("Authentication required")
+
+    query = (query or "").strip()
+    if not query:
+        return FeedPageType(items=[], next_cursor=None)
+
+    try:
+        offset = max(0, int(after or "0"))
+    except ValueError as exc:
+        raise ValueError("Invalid search cursor") from exc
+
+    page_size = max(1, min(int(limit or 20), 50))
+    rows = await PostRepository(ctx.db).search_by_content(query, limit=page_size + 1, offset=offset)
+
+    if hashtag:
+        tag = hashtag.strip().lstrip("#").lower()
+        if tag:
+            rows = [
+                (post, profile, score)
+                for post, profile, score in rows
+                if isinstance(post.hashtags, list) and any(str(item).strip().lstrip("#").lower() == tag for item in post.hashtags)
+            ]
+
+    if sort_by == "recent":
+        rows.sort(key=lambda item: item[0].created_at, reverse=True)
+    elif sort_by == "popular":
+        rows.sort(key=lambda item: item[0].view_count, reverse=True)
+    else:
+        rows.sort(key=lambda item: item[2], reverse=True)
+
+    has_more = len(rows) > page_size
+    rows = rows[:page_size]
+
+    items = []
+    for post, profile, _score in rows:
+        creator = await _profile_to_summary(ctx, profile) if profile else None
+        item = await _post_to_content_item(ctx, post)
+        if creator is None:
+            creator = ProfileSummaryType(
+                id=post.user_id,
+                username="",
+                display_name="",
+            )
+        items.append(FeedItemType(**vars(item), creator=creator))
+
+    next_cursor = str(offset + page_size) if has_more else None
+    return FeedPageType(items=items, next_cursor=next_cursor)
+
+
+async def _search_hashtags(ctx, query, after, limit) -> HashtagPageType:
+    from sqlalchemy import select, func, desc
+    from app.models.content import Post
+
+    term = (query or "").strip().lstrip("#").lower()
+    if not term:
+        return HashtagPageType(hashtags=[], next_cursor=None)
+
+    try:
+        offset = max(0, int(after or "0"))
+    except ValueError as exc:
+        raise ValueError("Invalid search cursor") from exc
+
+    page_size = max(1, min(int(limit or 20), 50))
+    stmt = (
+        select(Post.hashtags, func.sum(Post.view_count).label("view_total"), func.count(Post.id).label("post_count"))
+        .where(Post.deleted_at.is_(None))
+        .where(Post.status == "published")
+    )
+    result = await ctx.db.execute(stmt)
+    counts = {}
+    for hashtags, view_total, post_count in result.all():
+        if not hashtags:
+            continue
+        for value in hashtags:
+            tag = str(value).strip().lstrip("#").lower()
+            if tag and term in tag:
+                counts[tag] = {
+                    "posts": counts.get(tag, {}).get("posts", 0) + 1,
+                    "views": counts.get(tag, {}).get("views", 0) + (view_total or 0),
+                }
+
+    ranked = sorted(counts.items(), key=lambda item: (0 if item[0].startswith(term) else 1, -item[1]["views"], item[0]))
+    page = ranked[offset: offset + page_size + 1]
+    has_more = len(page) > page_size
+    page = page[:page_size]
+    hashtags = [
+        HashtagResultType(tag=tag, posts=data["posts"], views=data["views"])
+        for tag, data in page
+    ]
+    next_cursor = str(offset + page_size) if has_more else None
+    return HashtagPageType(hashtags=hashtags, next_cursor=next_cursor)
 
 
 async def _suggested_profiles(ctx, limit) -> List[ProfileSummaryType]:
@@ -4552,6 +4583,19 @@ async def _report_comment(ctx, id, reason) -> bool:
     return True
 
 
+# ── Subscriptions ────────────────────────────────────────────────────────────
+
+
+@strawberry.type
+class Subscription:
+    """Placeholder subscription root for future real-time features."""
+
+    @strawberry.subscription
+    async def placeholder(self) -> str:
+        """Placeholder subscription (subscriptions not yet implemented)."""
+        yield "placeholder"
+
+
 # ── Error Handling Extension ─────────────────────────────────────────────────
 
 
@@ -4607,6 +4651,7 @@ schema = strawberry.Schema(
     mutation=Mutation,
     subscription=Subscription,
     extensions=[ConnextionZErrorExtension],
+    config=StrawberryConfig(scalar_map=SCALAR_MAP),
 )
 
 

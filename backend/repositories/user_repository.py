@@ -9,10 +9,10 @@ from __future__ import annotations
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import User, UserRole
+from app.models.user import Profile, User, UserRole
 from repositories.base import BaseRepository
 
 
@@ -113,3 +113,62 @@ class UserRepository(BaseRepository[User]):
             limit=limit,
             is_active=True,
         )
+
+    async def search_by_username_and_display_name(
+        self, query: str, limit: int = 20, offset: int = 0
+    ) -> list[tuple[User, float]]:
+        """
+        Search users by username and display_name with relevance ranking.
+        
+        Ranking algorithm (via SQL case expression):
+        - Exact username match: 100
+        - Username prefix match: 70
+        - Display name prefix match: 55
+        - Username contains: 35
+        - Display name contains: 25
+        - Default: 10
+
+        Args:
+            query: Search query string
+            limit: Maximum number of results
+            offset: Number of results to skip
+
+        Returns:
+            List of (User, rank_score) tuples sorted by relevance
+        """
+        terms = [term for term in query.strip().split() if term]
+        if not terms:
+            return []
+
+        # Build patterns for matching
+        contains_pattern = "%" + "%".join(terms) + "%"
+        prefix_pattern = terms[0] + "%"
+        exact_value = " ".join(terms)
+
+        # Build rank score using SQL case expression
+        rank_score = case(
+            (func.lower(User.username) == exact_value.lower(), 100),
+            (func.lower(User.username).ilike(prefix_pattern), 70),
+            (func.lower(Profile.display_name).ilike(prefix_pattern), 55),
+            (func.lower(User.username).ilike(contains_pattern), 35),
+            (func.lower(Profile.display_name).ilike(contains_pattern), 25),
+            else_=10,
+        )
+
+        # Build the query
+        stmt = (
+            select(User, rank_score.label("rank_score"))
+            .join(Profile, User.id == Profile.user_id)
+            .where(
+                or_(
+                    func.lower(User.username).ilike(contains_pattern),
+                    func.lower(Profile.display_name).ilike(contains_pattern),
+                )
+            )
+            .order_by(desc("rank_score"), Profile.follower_count.desc(), User.username)
+            .offset(offset)
+            .limit(limit)
+        )
+
+        result = await self.db.execute(stmt)
+        return [(user, score) for user, score in result.all()]
