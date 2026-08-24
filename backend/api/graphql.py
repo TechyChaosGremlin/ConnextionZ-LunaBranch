@@ -1962,20 +1962,20 @@ def _message_to_gql(message) -> MessageType:
     )
 
 
-def _notification_to_gql(notification) -> NotificationType:
+def _notification_to_gql(notification) -> NotificationTypeDef:
     """Map a SQLAlchemy ``Notification`` to the strawberry type."""
-    return NotificationType(
+    return NotificationTypeDef(
         id=notification.id,
-        recipient_id=notification.recipient_id,
-        actor_id=notification.actor_id,
-        type=NotificationTypeEnum(notification.type.value) if notification.type else NotificationTypeEnum.SYSTEM,
-        status=NotificationStatus(notification.status.value) if notification.status else NotificationStatus.UNREAD,
+        user_id=notification.user_id,
+        type=notification.type,
         title=notification.title,
         body=notification.body,
-        link=notification.link,
+        data=notification.data,
+        channel=notification.channel,
+        is_read=notification.is_read,
         read_at=datetime.fromisoformat(notification.read_at) if notification.read_at else None,
+        actor_id=notification.actor_id,
         created_at=notification.created_at,
-        updated_at=notification.updated_at,
     )
 
 
@@ -3598,7 +3598,7 @@ async def _mark_notification_read(ctx, id) -> bool:
         raise ValueError("Notification not found")
     
     # Check ownership
-    if notification.recipient_id != user.id:
+    if notification.user_id != user.id:
         raise PermissionError("Not your notification")
 
     await repo.mark_as_read(notification)
@@ -4289,6 +4289,18 @@ async def _follow(ctx, username) -> FollowResultType:
         target_profile.follower_count = await follow_repo.count_followers(target.id)
     if viewer_profile:
         viewer_profile.following_count = await follow_repo.count_following(user.id)
+
+    from repositories.notification_repository import NotificationRepository
+    from app.models.notification import NotificationType as NType
+
+    await NotificationRepository(ctx.db).create_notification(
+        user_id=target.id,
+        type=NType.NEW_FOLLOWER,
+        title="New follower",
+        body=f"{user.username} started following you",
+        actor_id=user.id,
+    )
+
     await ctx.db.commit()
 
     return FollowResultType(
@@ -4398,6 +4410,17 @@ async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
     is_liked = await interactions.has_liked(id, user.id)
     if like and not is_liked:
         await interactions.toggle_like(id, user.id)
+        if post.user_id != user.id:
+            from repositories.notification_repository import NotificationRepository
+            from app.models.notification import NotificationType as NType
+
+            await NotificationRepository(ctx.db).create_notification(
+                user_id=post.user_id,
+                type=NType.NEW_LIKE,
+                title="New like",
+                body=f"{user.username} liked your post",
+                actor_id=user.id,
+            )
     elif not like and is_liked:
         await interactions.toggle_like(id, user.id)
 

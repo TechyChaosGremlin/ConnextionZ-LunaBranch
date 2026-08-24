@@ -14,7 +14,7 @@ from sqlalchemy import select, and_, or_, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.notification import (
-    Notification, NotificationType, NotificationStatus,
+    Notification, NotificationType, NotificationChannel,
 )
 from repositories.base import BaseRepository
 
@@ -39,10 +39,10 @@ class NotificationRepository(BaseRepository[Notification]):
     ) -> List[Notification]:
         """Get notifications for a user."""
         stmt = select(Notification).where(
-            Notification.recipient_id == user_id
+            Notification.user_id == user_id
         )
         if unread_only:
-            stmt = stmt.where(Notification.status != NotificationStatus.READ)
+            stmt = stmt.where(Notification.is_read.is_(False))
         if before_id:
             stmt = stmt.where(Notification.id < before_id)
         stmt = stmt.order_by(Notification.created_at.desc()).limit(limit)
@@ -52,16 +52,16 @@ class NotificationRepository(BaseRepository[Notification]):
     async def get_unread_count(self, user_id: uuid.UUID) -> int:
         """Get count of unread notifications for a user."""
         stmt = select(func.count(Notification.id)).where(
-            Notification.recipient_id == user_id,
-            Notification.status != NotificationStatus.READ,
+            Notification.user_id == user_id,
+            Notification.is_read.is_(False),
         )
         result = await self.db.execute(stmt)
         return result.scalar_one()
 
     async def mark_as_read(self, notification: Notification) -> Notification:
         """Mark a notification as read."""
-        notification.status = NotificationStatus.READ
-        notification.read_at = datetime.now(timezone.utc)
+        notification.is_read = True
+        notification.read_at = datetime.now(timezone.utc).isoformat()
         await self.db.flush()
         await self.db.refresh(notification)
         return notification
@@ -71,14 +71,38 @@ class NotificationRepository(BaseRepository[Notification]):
         stmt = (
             update(Notification)
             .where(
-                Notification.recipient_id == user_id,
-                Notification.status != NotificationStatus.READ,
+                Notification.user_id == user_id,
+                Notification.is_read.is_(False),
             )
             .values(
-                status=NotificationStatus.READ,
-                read_at=datetime.now(timezone.utc),
+                is_read=True,
+                read_at=datetime.now(timezone.utc).isoformat(),
             )
         )
         result = await self.db.execute(stmt)
         await self.db.flush()
         return result.rowcount
+
+    async def create_notification(
+        self,
+        *,
+        user_id: uuid.UUID,
+        type: NotificationType,
+        title: str,
+        body: Optional[str] = None,
+        actor_id: Optional[uuid.UUID] = None,
+        channel: NotificationChannel = NotificationChannel.IN_APP,
+        data: Optional[dict] = None,
+    ) -> Notification:
+        """Create and persist a new notification."""
+        notification = Notification(
+            user_id=user_id,
+            type=type,
+            title=title,
+            body=body,
+            actor_id=actor_id,
+            channel=channel,
+            data=data,
+        )
+        await self.create(notification)
+        return notification

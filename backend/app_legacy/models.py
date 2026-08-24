@@ -148,6 +148,56 @@ class PostLike(Base):
         UniqueConstraint("post_id", "user_id", name="uq_post_likes_pair"),
     )
 
+class Notification(Base):
+    __tablename__ = "notifications"
+
+    id: Mapped[int] = mapped_column(
+        Integer,
+        primary_key=True,
+        index=True
+    )
+
+    recipient_id: Mapped[int] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True
+    )
+
+    actor_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True
+    )
+
+    type: Mapped[str] = mapped_column(
+        String(40),
+        nullable=False,
+        index=True
+    )
+
+    post_id: Mapped[int | None] = mapped_column(
+        ForeignKey("posts.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True
+    )
+
+    text: Mapped[str] = mapped_column(
+        Text,
+        nullable=False
+    )
+
+    read: Mapped[bool] = mapped_column(
+        Boolean,
+        default=False,
+        nullable=False
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime,
+        default=datetime.utcnow,
+        nullable=False,
+        index=True
+    )
 
 class PostSave(Base):
     __tablename__ = "post_saves"

@@ -22,6 +22,16 @@ export type GraphQLPost = {
   scheduledAt?: string | null;
 };
 
+export type GraphQLNotification = {
+  id: string;
+  type: string;
+  actorId: string | null;
+  title: string;
+  body: string | null;
+  isRead: boolean;
+  createdAt: string;
+};
+
 export type UploadedPostMedia = {
   id: string;
   url: string;
@@ -114,6 +124,7 @@ export type GraphQLProfile = {
 import { BACKEND_API_URL, GRAPHQL_ENDPOINT } from "./api-config";
 import { type Result } from "./auth-store";
 
+
 async function uploadFile(file: Blob, filename: string, kind: "media" | "avatar"): Promise<Record<string, unknown> | null> {
   try {
     const form = new FormData();
@@ -130,6 +141,81 @@ async function uploadFile(file: Blob, filename: string, kind: "media" | "avatar"
     console.warn("Media upload unavailable", error);
     return null;
   }
+}
+
+
+export async function fetchNotificationsFromApi(): Promise<Result<GraphQLNotification[]>> {
+  const result = await graphqlRequestResult<{
+    notifications: { edges: { node: GraphQLNotification }[] };
+  }>(`
+    query Notifications {
+      notifications {
+        edges {
+          node {
+            id
+            type
+            actorId
+            title
+            body
+            isRead
+            createdAt
+          }
+        }
+      }
+    }
+  `);
+
+  if (!result.ok) {
+    return result;
+  }
+
+  return {
+    ok: true,
+    value: result.value.notifications.edges.map((edge) => edge.node),
+  };
+}
+
+export async function markNotificationReadFromApi(
+  id: string,
+): Promise<Result<boolean>> {
+  const result = await graphqlRequestResult<{
+    markNotificationRead: boolean;
+  }>(
+    `
+      mutation MarkNotificationRead($id: ID!) {
+        markNotificationRead(id: $id)
+      }
+    `,
+    { id },
+  );
+
+  if (!result.ok) {
+    return result;
+  }
+
+  return {
+    ok: true,
+    value: result.value.markNotificationRead,
+  };
+}
+
+export async function markAllNotificationsReadFromApi(): Promise<Result<boolean>> {
+  const result = await graphqlRequestResult<{
+    markAllNotificationsRead: boolean;
+  }>(`
+    mutation MarkAllNotificationsRead {
+      markAllNotificationsRead
+    }
+  `);
+
+  if (!result.ok) {
+    return result;
+  }
+
+  return {
+    ok: true,
+    value: result.value.markAllNotificationsRead,
+  };
 }
 
 export async function uploadMediaFile(file: Blob, filename: string, kind: "media" | "avatar" = "media"): Promise<string | null> {
