@@ -29,6 +29,43 @@ class LikeResult:
     liked: bool
     likes: int
 
+@strawberry.type
+class NotificationItem:
+    """
+    Notification data returned by the GraphQL API.
+
+    This shape intentionally matches the fields expected by the frontend
+    notification store.
+    """
+
+    id: str
+
+    # The kind of event that created the notification.
+    # Examples: "like", "comment", "follow", "mention"
+    type: str
+
+    # Username/handle of the user who caused the notification.
+    # This can be None for system or milestone notifications.
+    actor: str | None
+
+    # Human-readable text displayed in the notification list.
+    # Example: "liked your post"
+    text: str
+
+    # Related post, if the notification belongs to a post.
+    post_id: str | None = strawberry.field(
+        name="postId",
+        default=None,
+    )
+
+    # Unix timestamp in milliseconds so it matches the frontend's
+    # existing AppNotification.createdAt field.
+    created_at: int = strawberry.field(
+        name="createdAt",
+    )
+
+    # True once the user has read/opened the notification.
+    read: bool
 
 @strawberry.type
 class Playlist:

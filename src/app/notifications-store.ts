@@ -21,6 +21,11 @@
 //   notify()             → server-side; the client would receive it over a
 //                          socket and call `receive()` with the payload.
 
+import {
+  fetchNotificationsFromApi,
+  markAllNotificationsReadFromApi,
+  markNotificationReadFromApi,
+} from "./profile-graphql";
 import { useSyncExternalStore } from "react";
 import { type Result } from "./auth-store";
 
@@ -170,17 +175,45 @@ export function useUnreadCount(): number {
 }
 
 /**
- * The network seam. The screen calls this on mount so it has a real loading
- * state to render — the store is already warm, so what this actually models is
- * the refresh that a real client does every time the tab is opened.
+ * Fetches the logged-in user's notifications from the backend.
+ *
+ * The Notifications screen calls this when it opens so the local store
+ * stays synchronized with notifications persisted in the database.
+ *
+ * After a successful request, the returned GraphQL notifications are
+ * converted to AppNotification objects and published to the UI.
  */
 export async function fetchNotifications(): Promise<Result<AppNotification[]>> {
-  await new Promise((r) => setTimeout(r, 480));
-  if (!activeEmail) return { ok: false, error: "Sign in to see your notifications." };
-  if (typeof navigator !== "undefined" && navigator.onLine === false) {
-    return { ok: false, error: "You're offline. Reconnect to load your notifications." };
+  if (!activeEmail) {
+    return {
+      ok: false,
+      error: "Sign in to see your notifications.",
+    };
   }
-  return { ok: true, value: items };
+
+  const result = await fetchNotificationsFromApi();
+
+  if (!result.ok) {
+    return result;
+  }
+
+  items = result.value.map((notification) => ({
+    id: notification.id,
+    type: notification.type as NotificationType,
+    actor: notification.actor ?? undefined,
+    text: notification.text,
+    postId: notification.postId ?? undefined,
+    createdAt: notification.createdAt,
+    read: notification.read,
+  }));
+
+  persist();
+  publish();
+
+  return {
+    ok: true,
+    value: items,
+  };
 }
 
 // ─── WRITES ──────────────────────────────────────────────────────────────────
@@ -201,18 +234,49 @@ export function notify(input: Omit<AppNotification, "id" | "createdAt" | "read">
   return item;
 }
 
-export function markRead(id: string) {
+export async function markRead(id: string): Promise<void> {
   const index = items.findIndex((item) => item.id === id);
-  if (index < 0 || items[index].read) return;
+
+  if (index < 0 || items[index].read) {
+    return;
+  }
+
+  const result = await markNotificationReadFromApi(id);
+
+  if (!result.ok || !result.value) {
+    return;
+  }
+
   items = [...items];
-  items[index] = { ...items[index], read: true };
+  items[index] = {
+    ...items[index],
+    read: true,
+  };
+
   persist();
   publish();
 }
 
-export function markAllRead() {
-  if (!items.some((item) => !item.read)) return;
-  items = items.map((item) => (item.read ? item : { ...item, read: true }));
+export async function markAllRead(): Promise<void> {
+  if (!items.some((item) => !item.read)) {
+    return;
+  }
+
+  const result = await markAllNotificationsReadFromApi();
+
+  if (!result.ok || !result.value) {
+    return;
+  }
+
+  items = items.map((item) =>
+    item.read
+      ? item
+      : {
+          ...item,
+          read: true,
+        }
+  );
+
   persist();
   publish();
 }

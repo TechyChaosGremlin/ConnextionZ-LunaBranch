@@ -28,7 +28,7 @@ from slowapi.util import get_remote_address
 from backend.app.auth import delete_user_account, get_user_profile, AuthContext
 from backend.app.auth_routes import create_auth_router
 from backend.app.database import get_session, run_migrations
-from backend.app.models import Follow, Media as DbMedia, Playlist as DbPlaylist, Post as DbPost, PostLike, Profile as DbProfile, Sound as DbSound, User
+from backend.app.models import Follow, Media as DbMedia, Notification, Playlist as DbPlaylist, Post as DbPost, PostLike, Profile as DbProfile, Sound as DbSound, User
 from backend.app.media import AVATAR_TYPES, MAX_AVATAR_BYTES, MAX_MEDIA_BYTES, MEDIA_ROOT, MEDIA_TYPES, store_upload
 from backend.app.media_routes import create_media_router
 from backend.app.profile_validation import (
@@ -39,7 +39,7 @@ from backend.app.profile_validation import (
     validate_website,
 )
 from backend.app.graphql_types import (
-    ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, LikeResult, Playlist,
+    ContentItem, FeedItem, FeedPage, FollowResult, HashtagResult, LikeResult, NotificationItem, Playlist,
     PlaylistInput, PostInput, PostPage, Profile, ProfilePage, ProfileSummary, SoundResult,
     UpdatePlaylistInput, UpdatePostInput, UpdateProfileInput,
 )
@@ -340,6 +340,69 @@ class Query:
             return None
         return profile_to_graphql(profile)
 
+    @strawberry.field
+    def notifications(self, info: Info) -> list[NotificationItem]:
+        """
+        Return notifications for the currently logged-in user,
+        ordered from newest to oldest.
+        """
+
+        user_id = info.context.get("user_id")
+
+        if user_id is None:
+            raise api_error(
+                "Must be logged in to view notifications",
+                "UNAUTHENTICATED",
+                401,
+            )
+
+        with get_session() as session:
+            rows = session.execute(
+                select(Notification)
+                .where(Notification.recipient_id == user_id)
+                .order_by(Notification.created_at.desc())
+            ).scalars().all()
+
+            results: list[NotificationItem] = []
+
+            for notification in rows:
+                actor_username = None
+
+                # System notifications may not have an actor.
+                # For user-generated notifications, retrieve the actor's
+                # username so the frontend can display their handle.
+                if notification.actor_id is not None:
+                    actor_profile = session.execute(
+                        select(DbProfile).where(
+                            DbProfile.user_id == notification.actor_id
+                        )
+                    ).scalar_one_or_none()
+
+                    if actor_profile is not None:
+                        actor_username = actor_profile.username
+
+                results.append(
+                    NotificationItem(
+                        id=str(notification.id),
+                        type=notification.type,
+                        actor=actor_username,
+                        text=notification.text,
+                        post_id=(
+                            str(notification.post_id)
+                            if notification.post_id is not None
+                            else None
+                        ),
+                        # JavaScript timestamps use milliseconds, while
+                        # Python datetime.timestamp() returns seconds.
+                        created_at=int(
+                            notification.created_at.timestamp() * 1000
+                        ),
+                        read=notification.read,
+                    )
+                )
+
+            return results
+    
     @strawberry.field
     def profile(self, username: str, info: Info) -> Profile | None:
         """Fetch any user's public profile by username or numeric profile ID."""
@@ -827,7 +890,32 @@ class Mutation:
                         .where(DbPost.id == post_id)
                         .values(likes=DbPost.likes + 1)
                     )
-                    session.commit()
+
+                    # Find the profile that owns the post.
+                    # We need this so we know which user should receive
+                    # the like notification.
+                    post_owner = session.execute(
+                        select(DbProfile).where(
+                            DbProfile.id == post.profile_id
+                        )
+                    ).scalar_one_or_none()
+
+                    # Only create a notification when someone likes
+                    # another user's post. Users should not receive
+                    # notifications for liking their own posts.
+                    if post_owner is not None and post_owner.user_id != user_id:
+                        session.add(
+                            Notification(
+                                recipient_id=post_owner.user_id,
+                                actor_id=user_id,
+                                type="like",
+                                post_id=post_id,
+                                text="liked your post",
+                                read=False,
+                            )
+                        )
+
+                session.commit()
 
             session.refresh(post)
             current_count = post.likes
@@ -857,6 +945,79 @@ class Mutation:
             session.refresh(post)
             return LikeResult(liked=False, likes=current_count)
 
+    @strawberry.mutation(name="markNotificationRead")
+    def mark_notification_read(
+        self,
+        id: strawberry.ID,
+        info: Info,
+    ) -> bool:
+        """
+        Mark one notification as read.
+
+        A user can only mark their own notifications as read.
+        """
+
+        user_id = info.context.get("user_id")
+
+        if user_id is None:
+            raise api_error(
+                "Must be logged in to update notifications",
+                "UNAUTHENTICATED",
+                401,
+            )
+
+        notification_id = parse_int_id(id, "Notification ID")
+
+        with get_session() as session:
+            notification = session.execute(
+                select(Notification).where(
+                    Notification.id == notification_id,
+                    Notification.recipient_id == user_id,
+                )
+            ).scalar_one_or_none()
+
+            if notification is None:
+                raise api_error(
+                    "Notification not found",
+                    "NOT_FOUND",
+                    404,
+                )
+
+            notification.read = True
+            session.commit()
+
+            return True
+
+    @strawberry.mutation(name="markAllNotificationsRead")
+    def mark_all_notifications_read(self, info: Info) -> bool:
+        """
+        Mark every notification belonging to the logged-in user as read.
+        """
+
+        user_id = info.context.get("user_id")
+
+        if user_id is None:
+            raise api_error(
+                "Must be logged in to update notifications",
+                "UNAUTHENTICATED",
+                401,
+            )
+
+        with get_session() as session:
+            notifications = session.execute(
+                select(Notification).where(
+                    Notification.recipient_id == user_id,
+                    Notification.read.is_(False),
+                )
+            ).scalars().all()
+
+            for notification in notifications:
+                notification.read = True
+
+            session.commit()
+
+            return True
+
     @strawberry.mutation
     def follow(self, username: str, info: Info) -> FollowResult:
         with get_session() as session:
@@ -878,8 +1039,22 @@ class Mutation:
                     follower_id=follower.user_id,
                     following_id=target.user_id,
                 ))
+
                 follower.following += 1
                 target.followers += 1
+
+                # Create a notification for the user being followed.
+                session.add(
+                    Notification(
+                        recipient_id=target.user_id,
+                        actor_id=follower.user_id,
+                        type="follow",
+                        post_id=None,
+                        text="started following you",
+                        read=False,
+                    )
+                )
+
                 try:
                     session.commit()
                 except IntegrityError:
