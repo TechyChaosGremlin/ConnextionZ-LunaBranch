@@ -23,6 +23,8 @@ from app.models.social import (
     PostWatch,
     SearchQuery,
     Sound,
+    UserBlock,
+    UserMute,
 )
 from repositories.base import BaseRepository
 
@@ -76,6 +78,38 @@ class FollowRepository(BaseRepository[Follow]):
             select(func.count()).select_from(Follow).where(Follow.follower_id == user_id)
         )
         return result.scalar_one()
+
+
+class FeedSafetyRepository:
+    """Queries viewer-specific creator exclusions for feed generation."""
+
+    def __init__(self, db: AsyncSession):
+        self.db = db
+
+    async def get_hidden_creator_ids(
+        self, viewer_id: uuid.UUID, creator_ids: list[uuid.UUID]
+    ) -> set[uuid.UUID]:
+        if not creator_ids:
+            return set()
+        blocked = await self.db.execute(
+            select(UserBlock.blocked_id).where(
+                UserBlock.blocker_id == viewer_id,
+                UserBlock.blocked_id.in_(creator_ids),
+            )
+        )
+        blocking_viewer = await self.db.execute(
+            select(UserBlock.blocker_id).where(
+                UserBlock.blocked_id == viewer_id,
+                UserBlock.blocker_id.in_(creator_ids),
+            )
+        )
+        muted = await self.db.execute(
+            select(UserMute.muted_id).where(
+                UserMute.muter_id == viewer_id,
+                UserMute.muted_id.in_(creator_ids),
+            )
+        )
+        return set(blocked.scalars()) | set(blocking_viewer.scalars()) | set(muted.scalars())
 
 
 class PostInteractionRepository:

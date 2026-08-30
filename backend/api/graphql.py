@@ -2173,7 +2173,8 @@ async def _feed(ctx, cursor, limit, following) -> FeedPageType:
     """Personalized feed for the authenticated user (legacy cursor-page shape)."""
     from uuid import UUID as UUID_type
     from repositories.content_repository import PostRepository
-    from repositories.social_repository import FollowRepository
+    from repositories.profile_repository import ProfileRepository
+    from repositories.social_repository import FeedSafetyRepository, FollowRepository
     from app.models.content import ContentStatus
 
     user = ctx.require_auth()
@@ -2198,7 +2199,34 @@ async def _feed(ctx, cursor, limit, following) -> FeedPageType:
     posts = await post_repo.get_feed(
         user_ids=author_ids, limit=limit + 1, before_id=before_id,
     )
-    posts = [p for p in posts if p.status == ContentStatus.PUBLISHED]
+    hidden_creator_ids = await FeedSafetyRepository(ctx.db).get_hidden_creator_ids(
+        user.id, author_ids
+    )
+    following_ids = set(author_ids)
+    profile_repo = ProfileRepository(ctx.db)
+    profiles = {
+        creator_id: await profile_repo.get_by_user_id(creator_id)
+        for creator_id in {post.user_id for post in posts}
+    }
+
+    def is_visible(post) -> bool:
+        if post.status != ContentStatus.PUBLISHED:
+            return False
+        if getattr(post, "moderation_status", "approved") != "approved":
+            return False
+        if post.user_id in hidden_creator_ids:
+            return False
+        if post.user_id == user.id:
+            return True
+        profile = profiles.get(post.user_id)
+        if profile and profile.private_account and post.user_id not in following_ids:
+            return False
+        visibility = getattr(post, "visibility", "public")
+        if visibility == "private":
+            return False
+        return visibility != "followers" or post.user_id in following_ids
+
+    posts = [post for post in posts if is_visible(post)]
 
     has_more = len(posts) > limit
     if has_more:
@@ -4282,6 +4310,13 @@ async def _follow(ctx, username) -> FollowResultType:
     follow_repo = FollowRepository(ctx.db)
     await follow_repo.follow(user.id, target.id)
 
+    from repositories.analytics_repository import AnalyticsRepository
+    from app.models.analytics import SignalType
+
+    await AnalyticsRepository(ctx.db).record(
+        user_id=user.id, creator_id=target.id, signal_type=SignalType.FOLLOW
+    )
+
     profile_repo = ProfileRepository(ctx.db)
     target_profile = await profile_repo.get_by_user_id(target.id)
     viewer_profile = await profile_repo.get_by_user_id(user.id)
@@ -4322,6 +4357,13 @@ async def _unfollow(ctx, username) -> FollowResultType:
 
     follow_repo = FollowRepository(ctx.db)
     await follow_repo.unfollow(user.id, target.id)
+
+    from repositories.analytics_repository import AnalyticsRepository
+    from app.models.analytics import SignalType
+
+    await AnalyticsRepository(ctx.db).record(
+        user_id=user.id, creator_id=target.id, signal_type=SignalType.UNFOLLOW
+    )
 
     profile_repo = ProfileRepository(ctx.db)
     target_profile = await profile_repo.get_by_user_id(target.id)
@@ -4398,6 +4440,8 @@ async def _update_post_legacy(ctx, id, input) -> LegacyPostType:
 async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
     from repositories.content_repository import PostRepository
     from repositories.social_repository import PostInteractionRepository
+    from repositories.analytics_repository import AnalyticsRepository
+    from app.models.analytics import SignalType
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -4410,6 +4454,10 @@ async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
     is_liked = await interactions.has_liked(id, user.id)
     if like and not is_liked:
         created_like = await interactions.toggle_like(id, user.id)
+        if created_like:
+            await AnalyticsRepository(ctx.db).record(
+                user_id=user.id, creator_id=post.user_id, post_id=id, signal_type=SignalType.LIKE
+            )
         if created_like and post.user_id != user.id:
             from repositories.notification_repository import NotificationRepository
             from app.models.notification import NotificationType as NType
@@ -4423,6 +4471,9 @@ async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
             )
     elif not like and is_liked:
         await interactions.toggle_like(id, user.id)
+        await AnalyticsRepository(ctx.db).record(
+            user_id=user.id, creator_id=post.user_id, post_id=id, signal_type=SignalType.UNLIKE
+        )
 
     post.like_count = await interactions.count_likes(id)
     await ctx.db.commit()
@@ -4432,6 +4483,8 @@ async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
 async def _save_post_legacy(ctx, id, save: bool) -> SaveResultType:
     from repositories.content_repository import PostRepository
     from repositories.social_repository import PostInteractionRepository
+    from repositories.analytics_repository import AnalyticsRepository
+    from app.models.analytics import SignalType
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -4444,8 +4497,14 @@ async def _save_post_legacy(ctx, id, save: bool) -> SaveResultType:
     is_saved = await interactions.has_saved(id, user.id)
     if save and not is_saved:
         await interactions.toggle_save(id, user.id)
+        await AnalyticsRepository(ctx.db).record(
+            user_id=user.id, creator_id=post.user_id, post_id=id, signal_type=SignalType.SAVE
+        )
     elif not save and is_saved:
         await interactions.toggle_save(id, user.id)
+        await AnalyticsRepository(ctx.db).record(
+            user_id=user.id, creator_id=post.user_id, post_id=id, signal_type=SignalType.UNSAVE
+        )
 
     post.save_count = await interactions.count_saves(id)
     await ctx.db.commit()
@@ -4455,6 +4514,8 @@ async def _save_post_legacy(ctx, id, save: bool) -> SaveResultType:
 async def _share_post_legacy(ctx, id) -> ShareResultType:
     from repositories.content_repository import PostRepository
     from repositories.social_repository import PostInteractionRepository
+    from repositories.analytics_repository import AnalyticsRepository
+    from app.models.analytics import SignalType
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -4464,7 +4525,11 @@ async def _share_post_legacy(ctx, id) -> ShareResultType:
     if not post:
         raise ValueError("Post not found")
 
-    await interactions.add_share(id, user.id)
+    created_share = await interactions.add_share(id, user.id)
+    if created_share:
+        await AnalyticsRepository(ctx.db).record(
+            user_id=user.id, creator_id=post.user_id, post_id=id, signal_type=SignalType.SHARE
+        )
     post.share_count = await interactions.count_shares(id)
     await ctx.db.commit()
     return ShareResultType(shares=post.share_count, shared=True)
@@ -4473,6 +4538,8 @@ async def _share_post_legacy(ctx, id) -> ShareResultType:
 async def _track_post_watch(ctx, post_id, watched_seconds, completed) -> WatchResultType:
     from repositories.content_repository import PostRepository
     from repositories.social_repository import PostInteractionRepository
+    from repositories.analytics_repository import AnalyticsRepository
+    from app.models.analytics import SignalType
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -4487,6 +4554,28 @@ async def _track_post_watch(ctx, post_id, watched_seconds, completed) -> WatchRe
 
     watch = await interactions.track_watch(post_id, user.id, clamped_seconds, verified_completed)
     post.view_count = await interactions.count_views(post_id)
+
+    analytics = AnalyticsRepository(ctx.db)
+    if watch.rewatched:
+        await analytics.record(
+            user_id=user.id, creator_id=post.user_id, post_id=post_id, signal_type=SignalType.REWATCH
+        )
+    else:
+        await analytics.record(
+            user_id=user.id, creator_id=post.user_id, post_id=post_id, signal_type=SignalType.VIEW
+        )
+    await analytics.record(
+        user_id=user.id,
+        creator_id=post.user_id,
+        post_id=post_id,
+        signal_type=SignalType.WATCH_DURATION,
+        value=watch.watched_seconds,
+    )
+    if watch.completed:
+        await analytics.record(
+            user_id=user.id, creator_id=post.user_id, post_id=post_id, signal_type=SignalType.COMPLETION
+        )
+
     await ctx.db.commit()
 
     return WatchResultType(

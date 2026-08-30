@@ -54,6 +54,14 @@ def make_ctx(user: User | None) -> AppContext:
     return AppContext(db=AsyncMock(), current_user=user)
 
 
+@pytest.fixture(autouse=True)
+def _stub_analytics(monkeypatch):
+    async def noop_record(self, **kwargs):
+        return None
+
+    monkeypatch.setattr("repositories.analytics_repository.AnalyticsRepository.record", noop_record)
+
+
 class ContentionSession:
     """Minimal session double that accepts just one interaction row per key."""
 

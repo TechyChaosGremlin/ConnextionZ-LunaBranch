@@ -33,7 +33,7 @@ class Settings(BaseSettings):
 
     # ── JWT Authentication ───────────────────────────────────────
     jwt_secret_key: SecretStr = Field(
-        default=SecretStr("change-me-in-production"),
+        default=SecretStr("change-me-in-production-32-bytes-minimum"),
         description="Secret key for JWT token signing",
     )
     jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
@@ -62,7 +62,7 @@ class Settings(BaseSettings):
     )
     database_url_sync: str = Field(
         default="",
-        description="Sync PostgreSQL connection string for Alembic (psycopg2). "
+        description="Sync PostgreSQL connection string for Alembic (psycopg). "
         "Auto-derived from database_url if empty.",
     )
     postgres_user: str = Field(default="postgres")
@@ -131,13 +131,13 @@ class Settings(BaseSettings):
 
     @property
     def sync_database_url(self) -> str:
-        """Return a synchronous (psycopg2) database URL for Alembic."""
+        """Return a synchronous (psycopg) database URL for Alembic."""
         if self.database_url_sync:
             return self.database_url_sync
-        # Derive from async URL: replace asyncpg → psycopg2
+        # Derive from async URL: replace asyncpg with the installed sync psycopg driver.
         return (
-            self.database_url.replace("+asyncpg", "+psycopg2")
-            .replace("postgresql+psycopg2", "postgresql")
+            self.database_url.replace("+asyncpg", "+psycopg")
+            .replace("postgresql://", "postgresql+psycopg://", 1)
         )
 
 

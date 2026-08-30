@@ -108,7 +108,7 @@ def test_token_expiry(test_user):
     now = datetime.now(timezone.utc).timestamp()
 
     assert exp > now
-    assert exp <= now + (settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60) + 10
+    assert exp <= now + (settings.jwt_access_token_expire_minutes * 60) + 10
 
 
 def test_refresh_token_expiry(test_user):
@@ -124,4 +124,4 @@ def test_refresh_token_expiry(test_user):
     now = datetime.now(timezone.utc).timestamp()
 
     assert exp > now
-    assert exp <= now + (settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60) + 10
+    assert exp <= now + (settings.jwt_refresh_token_expire_days * 24 * 60 * 60) + 10

@@ -36,6 +36,38 @@ class Follow(Base, TimestampMixin):
     )
 
 
+class UserBlock(Base, TimestampMixin):
+    """A directional block between two users."""
+
+    __tablename__ = "user_blocks"
+    __table_args__ = (
+        UniqueConstraint("blocker_id", "blocked_id", name="uq_user_block_pair"),
+    )
+
+    blocker_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    blocked_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+
+class UserMute(Base, TimestampMixin):
+    """A directional mute between two users."""
+
+    __tablename__ = "user_mutes"
+    __table_args__ = (
+        UniqueConstraint("muter_id", "muted_id", name="uq_user_mute_pair"),
+    )
+
+    muter_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    muted_id: Mapped[uuid.UUID] = mapped_column(
+        PG_UUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+
 # ── Post interactions ────────────────────────────────────────────
 
 
