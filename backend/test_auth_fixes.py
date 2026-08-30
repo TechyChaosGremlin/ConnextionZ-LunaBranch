@@ -13,74 +13,69 @@ sys.path.insert(0, str(project_root))
 def test_imports():
     """Test that all auth modules can be imported."""
     print("Testing imports...")
-    
+
     try:
         from features.auth.jwt import create_access_token, decode_token
         print("  ✓ features.auth.jwt")
     except Exception as e:
         print(f"  ✗ features.auth.jwt: {e}")
-        return False
-    
+        raise AssertionError(f"features.auth.jwt import failed: {e}")
+
     try:
         from features.auth.rbac import require_role, has_permission
         print("  ✓ features.auth.rbac")
     except Exception as e:
         print(f"  ✗ features.auth.rbac: {e}")
-        return False
-    
+        raise AssertionError(f"features.auth.rbac import failed: {e}")
+
     try:
         from features.auth.middleware import get_current_user
         print("  ✓ features.auth.middleware")
     except Exception as e:
         print(f"  ✗ features.auth.middleware: {e}")
-        return False
-    
+        raise AssertionError(f"features.auth.middleware import failed: {e}")
+
     try:
         from features.auth.password import hash_password, verify_password
         print("  ✓ features.auth.password")
     except Exception as e:
         print(f"  ✗ features.auth.password: {e}")
-        return False
-    
+        raise AssertionError(f"features.auth.password import failed: {e}")
+
     try:
         from services.redis_service import RedisService
         print("  ✓ services.redis_service")
     except Exception as e:
         print(f"  ✗ services.redis_service: {e}")
-        return False
-    
-    return True
+        raise AssertionError(f"services.redis_service import failed: {e}")
+
 
 def test_jwt_creation():
     """Test JWT token creation with mock user."""
     print("\nTesting JWT creation...")
-    
+
     try:
         from app.models.user import User, UserRole
         from features.auth.jwt import create_access_token, decode_token
-        
-        # Create a mock user (without DB)
+
         user = User(
             email="test@example.com",
             username="testuser",
             hashed_password="hashed",
             role=UserRole.USER,
         )
-        
-        # Create token
+
         token = create_access_token(user)
         print(f"  ✓ Token created: {token[:20]}...")
-        
-        # Decode token
+
         payload = decode_token(token)
         print(f"  ✓ Token decoded, user_id: {payload.get('sub')}")
-        
-        return True
+        assert payload.get("sub") == str(user.id) if user.id is not None else True
     except Exception as e:
         print(f"  ✗ JWT creation failed: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise
 
 if __name__ == "__main__":
     print("=" * 60)

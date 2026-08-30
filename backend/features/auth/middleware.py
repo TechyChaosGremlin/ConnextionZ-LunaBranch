@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.dependencies import get_db_session
 from app.models.user import User, AccountStatus, UserRole
-from features.auth.jwt import decode_token, JWTError
+from features.auth.jwt import decode_token, JWTError, is_token_blacklisted
 from repositories.user_repository import UserRepository
 
 # HTTP Bearer security scheme
@@ -44,13 +44,25 @@ async def get_current_user(
         HTTPException: If token is invalid or user not found
     """
     try:
-        # Extract token from credentials
         token = credentials.credentials
-
-        # Decode and validate token
         payload = decode_token(token)
 
-        # Get user ID from token
+        if payload.get("type") not in {"access", "refresh"}:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid token type",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+        if payload.get("type") == "access":
+            jti = payload.get("jti")
+            if jti and await is_token_blacklisted(jti):
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Token revoked",
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+
         user_id = payload.get("sub")
         if user_id is None:
             raise HTTPException(
@@ -59,7 +71,6 @@ async def get_current_user(
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Fetch user from database
         user_repo = UserRepository(db)
         user = await user_repo.get_by_id(user_id)
 

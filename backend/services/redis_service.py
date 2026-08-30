@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import redis.asyncio as aioredis
@@ -197,11 +197,10 @@ class RedisService:
         if not self.redis:
             raise RuntimeError("Redis not connected")
 
-        # Calculate TTL until token expires
-        now = datetime.now()
+        now = datetime.now(timezone.utc)
         ttl = int((exp - now).total_seconds())
         if ttl > 0:
-            await self.redis.setex(f"blacklist:{jti}", ttl, "1")
+            await self.redis.set(f"blacklist:{jti}", "1", ex=ttl)
 
     async def is_token_blacklisted(self, jti: str) -> bool:
         """

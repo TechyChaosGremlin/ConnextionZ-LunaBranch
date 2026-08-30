@@ -25,6 +25,7 @@ async_engine = create_async_engine(
     pool_pre_ping=True,
     pool_size=10,
     max_overflow=20,
+    connect_args={"timeout": 10},
 )
 
 # Create async session factory

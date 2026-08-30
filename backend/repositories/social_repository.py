@@ -7,6 +7,7 @@ and search history.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import delete, func, select
@@ -77,6 +78,18 @@ class FollowRepository(BaseRepository[Follow]):
         result = await self.db.execute(
             select(func.count()).select_from(Follow).where(Follow.follower_id == user_id)
         )
+        return result.scalar_one()
+
+    async def count_followers_since(
+        self, user_id: uuid.UUID, start: datetime | None = None, end: datetime | None = None
+    ) -> int:
+        """New followers gained within a date range — for follower-growth analytics."""
+        stmt = select(func.count()).select_from(Follow).where(Follow.following_id == user_id)
+        if start is not None:
+            stmt = stmt.where(Follow.created_at >= start)
+        if end is not None:
+            stmt = stmt.where(Follow.created_at <= end)
+        result = await self.db.execute(stmt)
         return result.scalar_one()
 
 

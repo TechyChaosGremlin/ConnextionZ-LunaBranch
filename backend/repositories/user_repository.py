@@ -12,7 +12,8 @@ from uuid import UUID
 from sqlalchemy import case, desc, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.user import Profile, User, UserRole
+from app.models.social import UserBlock
+from app.models.user import AccountStatus, Profile, User, UserRole
 from repositories.base import BaseRepository
 
 
@@ -115,7 +116,14 @@ class UserRepository(BaseRepository[User]):
         )
 
     async def search_by_username_and_display_name(
-        self, query: str, limit: int = 20, offset: int = 0
+        self,
+        query: str,
+        viewer_id: UUID | None = None,
+        following_ids: list[UUID] | None = None,
+        verified_only: bool = False,
+        open_to_collab: bool | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[tuple[User, float]]:
         """
         Search users by username and display_name with relevance ranking.
@@ -130,6 +138,10 @@ class UserRepository(BaseRepository[User]):
 
         Args:
             query: Search query string
+            viewer_id: Authenticated viewer, when available
+            following_ids: Users followed by the viewer
+            verified_only: Restrict results to verified profiles
+            open_to_collab: Optionally restrict results by collaboration availability
             limit: Maximum number of results
             offset: Number of results to skip
 
@@ -144,6 +156,7 @@ class UserRepository(BaseRepository[User]):
         contains_pattern = "%" + "%".join(terms) + "%"
         prefix_pattern = terms[0] + "%"
         exact_value = " ".join(terms)
+        following_ids = following_ids or []
 
         # Build rank score using SQL case expression
         rank_score = case(
@@ -163,12 +176,35 @@ class UserRepository(BaseRepository[User]):
                 or_(
                     func.lower(User.username).ilike(contains_pattern),
                     func.lower(Profile.display_name).ilike(contains_pattern),
-                )
+                ),
+                User.status == AccountStatus.ACTIVE,
+                User.deleted_at.is_(None),
+                Profile.deleted_at.is_(None),
             )
             .order_by(desc("rank_score"), Profile.follower_count.desc(), User.username)
             .offset(offset)
             .limit(limit)
         )
+
+        if viewer_id is None:
+            stmt = stmt.where(Profile.private_account.is_(False))
+        else:
+            blocked_by_viewer = select(UserBlock.blocked_id).where(UserBlock.blocker_id == viewer_id)
+            blocking_viewer = select(UserBlock.blocker_id).where(UserBlock.blocked_id == viewer_id)
+            stmt = stmt.where(
+                ~User.id.in_(blocked_by_viewer),
+                ~User.id.in_(blocking_viewer),
+                or_(
+                    Profile.private_account.is_(False),
+                    User.id == viewer_id,
+                    User.id.in_(following_ids),
+                ),
+            )
+
+        if verified_only:
+            stmt = stmt.where(Profile.verified.is_(True))
+        if open_to_collab is not None:
+            stmt = stmt.where(Profile.open_to_collab.is_(open_to_collab))
 
         result = await self.db.execute(stmt)
         return [(user, score) for user, score in result.all()]

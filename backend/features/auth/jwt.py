@@ -132,7 +132,7 @@ def get_token_payload(token: str) -> dict[str, Any]:
         return {}
 
 
-def is_token_blacklisted(jti: str) -> bool:
+async def is_token_blacklisted(jti: str) -> bool:
     """
     Check if a token is blacklisted.
 
@@ -143,12 +143,23 @@ def is_token_blacklisted(jti: str) -> bool:
         True if token is blacklisted, False otherwise
     """
     from services.redis_service import RedisService
-    
+
     redis_service = RedisService()
-    return redis_service.is_token_blacklisted(jti)
+    try:
+        if not redis_service.redis:
+            await redis_service.connect()
+        return await redis_service.is_token_blacklisted(jti)
+    except Exception:
+        return False
+    finally:
+        if redis_service.redis:
+            try:
+                await redis_service.disconnect()
+            except Exception:
+                pass
 
 
-def blacklist_token(jti: str, exp: datetime) -> None:
+async def blacklist_token(jti: str, exp: datetime) -> None:
     """
     Add a token to the blacklist.
 
@@ -157,6 +168,17 @@ def blacklist_token(jti: str, exp: datetime) -> None:
         exp: Token expiration time
     """
     from services.redis_service import RedisService
-    
+
     redis_service = RedisService()
-    redis_service.blacklist_token(jti, exp)
+    try:
+        if not redis_service.redis:
+            await redis_service.connect()
+        await redis_service.blacklist_token(jti, exp)
+    except Exception:
+        return
+    finally:
+        if redis_service.redis:
+            try:
+                await redis_service.disconnect()
+            except Exception:
+                pass

@@ -11,7 +11,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -120,6 +120,21 @@ class Settings(BaseSettings):
     enable_two_tower_model: bool = Field(default=True)
     enable_agentic_router: bool = Field(default=True)
     enable_realtime_notifications: bool = Field(default=True)
+
+    @model_validator(mode="after")
+    def validate_production_secrets(self) -> "Settings":
+        """Ensure critical secrets and runtime flags are safe in production."""
+        if self.environment == "production":
+            if self.debug:
+                raise ValueError("FATAL: DEBUG must be disabled in production.")
+            if self.jwt_secret_key.get_secret_value() == "change-me-in-production-32-bytes-minimum":
+                raise ValueError(
+                    "FATAL: JWT_SECRET_KEY must be set to a secure value in production. "
+                    "Do not use the default insecure value."
+                )
+            if len(self.jwt_secret_key.get_secret_value()) < 32:
+                raise ValueError("FATAL: JWT_SECRET_KEY must be at least 32 characters long in production.")
+        return self
 
     # ── Rate Limiting ────────────────────────────────────────────
     rate_limit_per_minute: int = Field(default=60)

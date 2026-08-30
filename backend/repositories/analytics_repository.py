@@ -10,6 +10,7 @@ five different tables.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -59,6 +60,35 @@ class AnalyticsRepository(BaseRepository[InteractionSignal]):
             .limit(limit)
         )
         return list(result.scalars().all())
+
+    async def signal_totals(
+        self,
+        *,
+        creator_id: uuid.UUID | None = None,
+        post_id: uuid.UUID | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+    ) -> dict[SignalType, dict[str, float]]:
+        """Per-signal-type event count + summed value, scoped to a creator and/or
+        post and/or date range — powers the creator/post analytics dashboard."""
+        stmt = select(
+            InteractionSignal.signal_type,
+            func.count().label("cnt"),
+            func.sum(InteractionSignal.value).label("total"),
+        ).group_by(InteractionSignal.signal_type)
+        if creator_id is not None:
+            stmt = stmt.where(InteractionSignal.creator_id == creator_id)
+        if post_id is not None:
+            stmt = stmt.where(InteractionSignal.post_id == post_id)
+        if start is not None:
+            stmt = stmt.where(InteractionSignal.created_at >= start)
+        if end is not None:
+            stmt = stmt.where(InteractionSignal.created_at <= end)
+        result = await self.db.execute(stmt)
+        return {
+            row.signal_type: {"count": row.cnt, "total": float(row.total or 0.0)}
+            for row in result.all()
+        }
 
     async def creator_affinity(self, user_id: uuid.UUID, limit: int = 20) -> list[tuple[uuid.UUID, float]]:
         """Creators this user engages with most, weighted by signal value."""

@@ -10,11 +10,12 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import case, desc, func, or_, select, String, cast
+from sqlalchemy import and_, case, desc, func, or_, select, String, cast
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.content import Post, Comment, Media, ContentType, ContentStatus
-from app.models.user import Profile, User
+from app.models.social import UserBlock, UserMute
+from app.models.user import AccountStatus, Profile, User
 from repositories.base import BaseRepository
 
 
@@ -160,7 +161,12 @@ class PostRepository(BaseRepository[Post]):
         return result.scalar_one()
 
     async def search_by_content(
-        self, query: str, limit: int = 20, offset: int = 0
+        self,
+        query: str,
+        viewer_id: uuid.UUID | None = None,
+        following_ids: list[uuid.UUID] | None = None,
+        limit: int = 20,
+        offset: int = 0,
     ) -> list[tuple[Post, Profile, float]]:
         """
         Search posts by caption, hashtags, audio, or creator with relevance ranking.
@@ -176,6 +182,8 @@ class PostRepository(BaseRepository[Post]):
 
         Args:
             query: Search query string
+            viewer_id: Authenticated viewer, when available
+            following_ids: Users followed by the viewer
             limit: Maximum number of results
             offset: Number of results to skip
 
@@ -189,6 +197,7 @@ class PostRepository(BaseRepository[Post]):
         # Build patterns for matching
         contains_pattern = "%" + "%".join(terms) + "%"
         prefix_pattern = terms[0] + "%"
+        following_ids = following_ids or []
 
         # Build rank score using SQL case expression
         rank_score = (
@@ -230,10 +239,40 @@ class PostRepository(BaseRepository[Post]):
             .where(*filters)
             .where(Post.deleted_at.is_(None))
             .where(Post.status == ContentStatus.PUBLISHED)
+            .where(Post.moderation_status == "approved")
+            .where(User.status == AccountStatus.ACTIVE)
+            .where(User.deleted_at.is_(None))
+            .where(Profile.deleted_at.is_(None))
             .order_by(desc("rank_score"), Post.view_count.desc(), Post.id.desc())
             .offset(offset)
             .limit(limit)
         )
+
+        if viewer_id is None:
+            stmt = stmt.where(
+                Profile.private_account.is_(False),
+                Post.visibility == "public",
+            )
+        else:
+            blocked_by_viewer = select(UserBlock.blocked_id).where(UserBlock.blocker_id == viewer_id)
+            blocking_viewer = select(UserBlock.blocker_id).where(UserBlock.blocked_id == viewer_id)
+            muted_by_viewer = select(UserMute.muted_id).where(UserMute.muter_id == viewer_id)
+            stmt = stmt.where(
+                ~Post.user_id.in_(blocked_by_viewer),
+                ~Post.user_id.in_(blocking_viewer),
+                ~Post.user_id.in_(muted_by_viewer),
+                or_(
+                    Post.user_id == viewer_id,
+                    and_(
+                        Profile.private_account.is_(False),
+                        Post.visibility == "public",
+                    ),
+                    and_(
+                        Post.user_id.in_(following_ids),
+                        Post.visibility.in_(("public", "followers")),
+                    ),
+                ),
+            )
 
         result = await self.db.execute(stmt)
         return [(post, profile, score) for post, profile, score in result.all()]
@@ -298,6 +337,26 @@ class CommentRepository(BaseRepository[Comment]):
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def count_for_creator(
+        self,
+        creator_id: uuid.UUID,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> int:
+        """Count comments on a creator's posts, optionally scoped to a date range."""
+        stmt = (
+            select(func.count())
+            .select_from(Comment)
+            .join(Post, Comment.post_id == Post.id)
+            .where(Post.user_id == creator_id, Comment.deleted_at.is_(None))
+        )
+        if start is not None:
+            stmt = stmt.where(Comment.created_at >= start)
+        if end is not None:
+            stmt = stmt.where(Comment.created_at <= end)
+        result = await self.db.execute(stmt)
+        return result.scalar_one()
+
     async def soft_delete(self, comment_id: uuid.UUID) -> bool:
         """
         Soft-delete a comment.
@@ -314,3 +373,31 @@ class CommentRepository(BaseRepository[Comment]):
         comment.deleted_at = datetime.now(timezone.utc)
         await self.db.flush()
         return True
+
+
+class MediaRepository(BaseRepository[Media]):
+    """Repository for Media records attached to posts."""
+
+    def __init__(self, db: AsyncSession):
+        super().__init__(db, Media)
+
+    async def get_by_id(
+        self, media_id: uuid.UUID, include_deleted: bool = False
+    ) -> Optional[Media]:
+        stmt = select(Media).where(Media.id == media_id)
+        if not include_deleted:
+            stmt = stmt.where(Media.deleted_at.is_(None))
+        result = await self.db.execute(stmt)
+        return result.scalar_one_or_none()
+
+    async def get_by_post_id(self, post_id: uuid.UUID) -> list[Media]:
+        result = await self.db.execute(
+            select(Media)
+            .where(Media.post_id == post_id, Media.deleted_at.is_(None))
+            .order_by(Media.created_at.asc())
+        )
+        return list(result.scalars().all())
+
+    async def soft_delete(self, media: Media) -> None:
+        media.deleted_at = datetime.now(timezone.utc)
+        await self.db.flush()

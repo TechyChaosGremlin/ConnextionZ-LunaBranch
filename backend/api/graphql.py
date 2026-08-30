@@ -2868,34 +2868,49 @@ async def _discover_creators(ctx, query, tags, first, after) -> CreatorCardConne
 
 async def _search(ctx, input, first, after) -> SearchResultConnection:
     """Platform-wide search across users, posts, sounds, and collaborations."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
+    user = ctx.require_auth()
 
-    from uuid import UUID as UUID_type
     from repositories.user_repository import UserRepository
     from repositories.content_repository import PostRepository
+    from repositories.social_repository import FollowRepository
+
+    query = (input.query or "").strip()
+    if not query:
+        return SearchResultConnection(
+            edges=[],
+            page_info=PageInfo(has_next_page=False, has_previous_page=False),
+            total_count=0,
+        )
+    if not isinstance(first, int) or first < 1 or first > 50:
+        raise ValueError("first must be between 1 and 50")
 
     selected_types = set()
     if input.types:
         for item in input.types:
             selected_types.add(getattr(item, "value", item))
+    if selected_types - {"USER", "POST"}:
+        raise ValueError("Unsupported search type")
 
-    # Parse cursor for pagination
-    before_id = None
+    # Parse offset cursor for pagination.
+    offset = 0
     if after:
         try:
-            before_id = UUID_type(after)
-        except ValueError:
+            offset = max(0, int(after))
+        except (TypeError, ValueError):
             raise ValueError("Invalid cursor")
 
     results = []  # List of (SearchResultType, score) tuples for sorting
+    following_ids = await FollowRepository(ctx.db).get_following_ids(user.id)
+    fetch_limit = offset + first + 1
 
     # Search users - returns (User, rank_score) tuples
     if not input.types or "USER" in selected_types:
         user_repo = UserRepository(ctx.db)
-        limit_per_type = max(1, first // 3) if first > 0 else 10
         user_results = await user_repo.search_by_username_and_display_name(
-            input.query, limit=limit_per_type
+            query,
+            viewer_id=user.id,
+            following_ids=following_ids,
+            limit=fetch_limit,
         )
         for user, score in user_results:
             search_result = SearchResultType(
@@ -2908,9 +2923,11 @@ async def _search(ctx, input, first, after) -> SearchResultConnection:
     # Search posts - returns (Post, Profile, rank_score) tuples
     if not input.types or "POST" in selected_types:
         post_repo = PostRepository(ctx.db)
-        limit_per_type = max(1, first // 3) if first > 0 else 10
         post_results = await post_repo.search_by_content(
-            input.query, limit=limit_per_type
+            query,
+            viewer_id=user.id,
+            following_ids=following_ids,
+            limit=fetch_limit,
         )
         for post, profile, score in post_results:
             search_result = SearchResultType(
@@ -2923,26 +2940,24 @@ async def _search(ctx, input, first, after) -> SearchResultConnection:
     # Sort by relevance score (descending), then by created_at
     results.sort(key=lambda x: (-x[1], -x[0].post.created_at.timestamp() if x[0].post else -x[0].user.created_at.timestamp()))
     
-    # Apply pagination
-    has_next_page = len(results) > first if first > 0 else False
-    if has_next_page:
-        results = results[:first]
-    else:
-        results = results[:first] if first > 0 else results
+    # Apply pagination after combining types so relevance ordering remains stable.
+    page = results[offset:offset + first + 1]
+    has_next_page = len(page) > first
+    results = page[:first]
     
     # Build edges
     edges = [
         SearchResultEdge(
             node=search_result,
-            cursor=str(search_result.user.id if search_result.user else search_result.post.id),
+            cursor=str(offset + index),
         )
-        for search_result, _score in results
+        for index, (search_result, _score) in enumerate(results, start=1)
     ]
     
     # Build page info
     page_info = PageInfo(
         has_next_page=has_next_page,
-        has_previous_page=False,
+        has_previous_page=offset > 0,
         start_cursor=edges[0].cursor if edges else None,
         end_cursor=edges[-1].cursor if edges else None,
     )
@@ -2952,80 +2967,114 @@ async def _search(ctx, input, first, after) -> SearchResultConnection:
         page_info=page_info,
         total_count=len(results),
     )
-    
+
+
+async def _creator_analytics(ctx, period) -> AnalyticsSummaryType:
+    """Creator-only dashboard summary for a date range, reusing existing
+    denormalized post counters, InteractionSignal events, and follow data."""
+    from repositories.content_repository import PostRepository, CommentRepository
+    from repositories.social_repository import FollowRepository
+    from repositories.analytics_repository import AnalyticsRepository
+    from app.models.analytics import SignalType
+
+    user = ctx.require_auth()
+    start, end = period.start, period.end
+
     post_repo = PostRepository(ctx.db)
-    profile_repo = ProfileRepository(ctx.db)
-    
-    # Get user's posts
-    posts = await post_repo.get_by_user_id(user.id, limit=100)
-    
-    # Calculate analytics
+    posts = await post_repo.get_by_user_id(user.id, limit=500)
     total_posts = len(posts)
-    total_views = sum(p.view_count for p in posts)
-    total_likes = sum(p.like_count for p in posts)
-    total_comments = sum(p.comment_count for p in posts)
-    total_shares = sum(p.share_count for p in posts)
-    
-    # Get profile for follower info
-    profile = await profile_repo.get_by_user_id(user.id)
-    follower_change = profile.follower_count if profile else 0
-    
-    # Calculate engagement rate (simplified)
+
+    signals = await AnalyticsRepository(ctx.db).signal_totals(
+        creator_id=user.id, start=start, end=end
+    )
+
+    def signal_count(*types: "SignalType") -> int:
+        return sum(int(signals.get(t, {}).get("count", 0)) for t in types)
+
+    total_views = signal_count(SignalType.VIEW, SignalType.REWATCH)
+    total_shares = signal_count(SignalType.SHARE)
+    total_likes = signal_count(SignalType.LIKE)
+
+    total_comments = await CommentRepository(ctx.db).count_for_creator(
+        user.id, start=start, end=end
+    )
+
+    follow_repo = FollowRepository(ctx.db)
+    new_followers = await follow_repo.count_followers_since(user.id, start=start, end=end)
+
     engagement_rate = 0.0
     if total_views > 0:
         engagement_rate = (total_likes + total_comments + total_shares) / total_views * 100
-    
+
+    top_posts = sorted(
+        posts, key=lambda p: p.like_count + p.comment_count + p.share_count, reverse=True
+    )[:5]
+    top_post_types = [
+        PostAnalyticsType(
+            post=_post_to_gql(p),
+            views=p.view_count,
+            likes=p.like_count,
+            comments=p.comment_count,
+            shares=p.share_count,
+        )
+        for p in top_posts
+    ]
+
     return AnalyticsSummaryType(
-        user_id=user.id,
-        period=period,
+        period_start=start,
+        period_end=end,
         total_posts=total_posts,
         total_views=total_views,
         total_likes=total_likes,
         total_comments=total_comments,
         total_shares=total_shares,
-        follower_change=follower_change,
-        top_post_id=None,  # TODO: Find top post
+        follower_growth=new_followers,
+        new_followers=new_followers,
+        lost_followers=0,
         engagement_rate=engagement_rate,
+        top_posts=top_post_types,
     )
 
 
 async def _post_analytics(ctx, post_id) -> Optional[PostAnalyticsType]:
-    """Get analytics for a specific post."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
-    
-    from uuid import UUID as UUID_type
+    """Get analytics for a specific post (owner only)."""
     from repositories.content_repository import PostRepository
-    
-    try:
-        pid = UUID_type(post_id)
-    except ValueError:
-        raise ValueError("Invalid post ID")
-    
+    from repositories.analytics_repository import AnalyticsRepository
+    from app.models.analytics import SignalType
+
+    user = ctx.require_auth()
+
     repo = PostRepository(ctx.db)
-    post = await repo.get_by_id(pid)
-    
+    post = await repo.get_by_id(post_id)
+
     if not post:
         return None
-    
-    # Check ownership
-    if post.user_id != ctx.user.id:
+
+    if post.user_id != user.id:
         raise PermissionError("Not your post")
-    
-    # Calculate reach and impressions (simplified)
-    reach = post.view_count * 2 if post.view_count > 0 else 0
-    impressions = post.view_count
-    
+
+    signals = await AnalyticsRepository(ctx.db).signal_totals(post_id=post_id)
+    watch_events = int(signals.get(SignalType.VIEW, {}).get("count", 0)) + int(
+        signals.get(SignalType.REWATCH, {}).get("count", 0)
+    )
+    watch_duration = signals.get(SignalType.WATCH_DURATION, {})
+    completions = int(signals.get(SignalType.COMPLETION, {}).get("count", 0))
+
+    avg_watch_time = (
+        watch_duration.get("total", 0.0) / watch_duration.get("count", 1)
+        if watch_duration.get("count")
+        else None
+    )
+    completion_rate = (completions / watch_events * 100) if watch_events > 0 else None
+
     return PostAnalyticsType(
-        post_id=pid,
+        post=_post_to_gql(post),
         views=post.view_count,
         likes=post.like_count,
         comments=post.comment_count,
         shares=post.share_count,
-        reach=reach,
-        impressions=impressions,
-        engagement_rate=0.0,  # TODO: Calculate
-        demographics=None,  # TODO: Add demographics
+        avg_watch_time=avg_watch_time,
+        completion_rate=completion_rate,
     )
 
 
@@ -4045,41 +4094,48 @@ async def _profile_detail_for_user(ctx, user) -> Optional[ProfileDetailType]:
 
 
 async def _search_profiles(ctx, query, after, limit, verified_only, open_to_collab) -> ProfilePageType:
-    from sqlalchemy import select, or_
-    from app.models.user import Profile, User
+    from repositories.social_repository import FollowRepository
+    from repositories.user_repository import UserRepository
 
-    offset = int(after) if after else 0
-    stmt = (
-        select(Profile)
-        .join(User, Profile.user_id == User.id)
-        .where(
-            or_(User.username.ilike(f"%{query}%"), Profile.display_name.ilike(f"%{query}%")),
-            Profile.private_account.is_(False),
-        )
+    query = (query or "").strip()
+    if not query:
+        return ProfilePageType(profiles=[], next_cursor=None)
+    try:
+        offset = max(0, int(after or "0"))
+    except ValueError as exc:
+        raise ValueError("Invalid search cursor") from exc
+
+    page_size = max(1, min(int(limit or 20), 50))
+    viewer = ctx.user
+    following_ids = (
+        await FollowRepository(ctx.db).get_following_ids(viewer.id) if viewer else []
     )
-    if verified_only:
-        stmt = stmt.where(Profile.verified.is_(True))
-    if open_to_collab is not None:
-        stmt = stmt.where(Profile.open_to_collab.is_(open_to_collab))
-    stmt = stmt.offset(offset).limit(limit + 1)
+    rows = await UserRepository(ctx.db).search_by_username_and_display_name(
+        query,
+        viewer_id=viewer.id if viewer else None,
+        following_ids=following_ids,
+        verified_only=verified_only,
+        open_to_collab=open_to_collab,
+        limit=page_size + 1,
+        offset=offset,
+    )
 
-    result = await ctx.db.execute(stmt)
-    profiles = list(result.scalars().all())
+    profiles = [user.profile for user, _score in rows if user.profile is not None]
 
-    has_more = len(profiles) > limit
+    has_more = len(profiles) > page_size
     if has_more:
-        profiles = profiles[:limit]
+        profiles = profiles[:page_size]
 
     summaries = [await _profile_to_summary(ctx, p) for p in profiles]
-    next_cursor = str(offset + limit) if has_more else None
+    next_cursor = str(offset + page_size) if has_more else None
     return ProfilePageType(profiles=summaries, next_cursor=next_cursor)
 
 
 async def _search_posts(ctx, query, after, limit, hashtag, sort_by) -> FeedPageType:
     from repositories.content_repository import PostRepository
+    from repositories.social_repository import FollowRepository
 
-    if not ctx.user:
-        raise ValueError("Authentication required")
+    user = ctx.require_auth()
 
     query = (query or "").strip()
     if not query:
@@ -4091,7 +4147,14 @@ async def _search_posts(ctx, query, after, limit, hashtag, sort_by) -> FeedPageT
         raise ValueError("Invalid search cursor") from exc
 
     page_size = max(1, min(int(limit or 20), 50))
-    rows = await PostRepository(ctx.db).search_by_content(query, limit=page_size + 1, offset=offset)
+    following_ids = await FollowRepository(ctx.db).get_following_ids(user.id)
+    rows = await PostRepository(ctx.db).search_by_content(
+        query,
+        viewer_id=user.id,
+        following_ids=following_ids,
+        limit=page_size + 1,
+        offset=offset,
+    )
 
     if hashtag:
         tag = hashtag.strip().lstrip("#").lower()
