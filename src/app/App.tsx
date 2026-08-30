@@ -260,9 +260,9 @@ const toComment = (comment: GraphQLComment): Comment => ({
 });
 
 function CommentSheet({
-  video, onClose,
+  video, onClose, onCommentCountChange,
 }: {
-  video: DisplayVideo; onClose: () => void;
+  video: DisplayVideo; onClose: () => void; onCommentCountChange: (delta: number) => void;
 }) {
   const isDark = useTheme();
   const [text, setText] = useState("");
@@ -293,6 +293,7 @@ function CommentSheet({
     const result = await addComment(video.id, t);
     if (!result.ok) { setError(result.error); setSubmitting(false); return; }
     setComments((previous) => [...previous, toComment(result.value)]);
+    onCommentCountChange(1);
     setText("");
     setSubmitting(false);
     setTimeout(() => { listRef.current?.scrollTo({ top: listRef.current.scrollHeight, behavior: "smooth" }); }, 50);
@@ -302,6 +303,7 @@ function CommentSheet({
     const result = await deleteComment(id);
     if (!result.ok) { setError(result.error); return; }
     setComments((previous) => previous.filter((comment) => comment.id !== id));
+    onCommentCountChange(-1);
   };
 
   const edit = async (comment: Comment) => {
@@ -550,9 +552,9 @@ function ShareSheet({ video, onClose, onShared }: { video: DisplayVideo; onClose
 // ─── ACTION RAIL ──────────────────────────────────────────────────────────────
 
 function ActionRail({
-  video, liked, likeCount, saved, saveCount, shareCount, onLike, onSave, onCollab, onComment, onShare,
+  video, liked, likeCount, saved, saveCount, commentCount, shareCount, onLike, onSave, onCollab, onComment, onShare,
 }: {
-  video: DisplayVideo; liked: boolean; likeCount: number; saved: boolean; saveCount: number; shareCount: number;
+  video: DisplayVideo; liked: boolean; likeCount: number; saved: boolean; saveCount: number; commentCount: number; shareCount: number;
   onLike: () => void; onSave: () => void; onCollab: () => void; onComment: () => void; onShare: () => void;
 }) {
   return (
@@ -572,7 +574,7 @@ function ActionRail({
         <motion.button whileTap={{ scale: 0.85 }} onClick={onComment}>
           <MessageCircle className="w-7 h-7 text-white drop-shadow-lg" />
         </motion.button>
-        <span className="text-white text-[11px] font-semibold">{fmt(video.comments)}</span>
+        <span className="text-white text-[11px] font-semibold">{fmt(commentCount)}</span>
       </div>
       <CollabButton onTap={onCollab} />
       <motion.button whileTap={{ scale: 0.85 }} onClick={onSave} className="flex flex-col items-center gap-1">
@@ -813,6 +815,7 @@ export default function App() {
   const [collabTarget, setCollabTarget] = useState<DisplayVideo | null>(null);
   const [commentTarget, setCommentTarget] = useState<DisplayVideo | null>(null);
   const [shareTarget, setShareTarget] = useState<DisplayVideo | null>(null);
+  const [commentCountOverrides, setCommentCountOverrides] = useState<Map<string, number>>(() => new Map());
   const [paused, setPaused] = useState(false);
   const touchStartY = useRef(0);
   const pausedRef = useRef(paused);
@@ -852,6 +855,14 @@ export default function App() {
   const likeState = useLike(video?.id ?? "", video?.isLiked ?? false, video?.likes ?? 0);
   const saveState = useSave(video?.id ?? "", video?.isSaved ?? false, video?.saves ?? 0);
   const shareState = useShare(video?.id ?? "", video?.shares ?? 0);
+  const commentCount = video ? commentCountOverrides.get(video.id) ?? video.comments : 0;
+  const changeCommentCount = useCallback((postId: string, delta: number) => {
+    setCommentCountOverrides((previous) => {
+      const next = new Map(previous);
+      next.set(postId, Math.max(0, (next.get(postId) ?? feed.find((item) => item.id === postId)?.comments ?? 0) + delta));
+      return next;
+    });
+  }, [feed]);
 
   // A page after the next is requested a slide before it is needed, so
   // scrolling never waits on a page that is still in flight.
@@ -990,6 +1001,7 @@ export default function App() {
 
               <ActionRail video={video} liked={likeState.liked} likeCount={likeState.likes}
                 saved={saveState.saved} saveCount={saveState.saves}
+                commentCount={commentCount}
                 onLike={() => { void likeState.toggle(); }}
                 onSave={() => { void saveState.toggle(); }}
                 onCollab={() => setCollabTarget(video)}
@@ -1091,7 +1103,8 @@ export default function App() {
                 <motion.div key="comment-backdrop" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }}
                   className="absolute inset-0 z-40" style={{ background: "rgba(0,0,0,0.5)", backdropFilter: "blur(4px)" }}
                   onClick={() => setCommentTarget(null)} />
-                <CommentSheet key="comment-sheet" video={commentTarget} onClose={() => setCommentTarget(null)} />
+                <CommentSheet key="comment-sheet" video={commentTarget} onClose={() => setCommentTarget(null)}
+                  onCommentCountChange={(delta) => changeCommentCount(commentTarget.id, delta)} />
               </>
             )}
           </AnimatePresence>

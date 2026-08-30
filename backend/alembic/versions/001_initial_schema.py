@@ -85,12 +85,12 @@ def upgrade() -> None:
         sa.Column("hashed_password", sa.String(128), nullable=False),
         sa.Column(
             "role",
-            sa.Enum("admin", "creator", "user", "guest", name="user_role"),
+            postgresql.ENUM("admin", "creator", "user", "guest", name="user_role", create_type=False),
             nullable=False,
         ),
         sa.Column(
             "status",
-            sa.Enum("active", "suspended", "banned", "pending_verification", name="account_status"),
+            postgresql.ENUM("active", "suspended", "banned", "pending_verification", name="account_status", create_type=False),
             nullable=False,
         ),
         sa.Column("email_verified", sa.Boolean(), nullable=False),
@@ -162,12 +162,12 @@ def upgrade() -> None:
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "content_type",
-            sa.Enum("post", "video", "image", "audio", "live_stream", name="content_type"),
+            postgresql.ENUM("post", "video", "image", "audio", "live_stream", name="content_type", create_type=False),
             nullable=False,
         ),
         sa.Column(
             "status",
-            sa.Enum("draft", "published", "archived", "flagged", "removed", name="content_status"),
+            postgresql.ENUM("draft", "published", "archived", "flagged", "removed", name="content_status", create_type=False),
             nullable=False,
         ),
         sa.Column("title", sa.String(512), nullable=True),
@@ -251,7 +251,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column(
             "status",
-            sa.Enum("proposed", "accepted", "declined", "in_progress", "completed", "cancelled", name="collaboration_status"),
+            postgresql.ENUM("proposed", "accepted", "declined", "in_progress", "completed", "cancelled", name="collaboration_status", create_type=False),
             nullable=False,
         ),
         sa.Column("content_type", sa.String(64), nullable=True),
@@ -299,7 +299,7 @@ def upgrade() -> None:
         sa.Column("description", sa.Text(), nullable=True),
         sa.Column(
             "status",
-            sa.Enum("pending", "in_progress", "completed", "disputed", name="milestone_status"),
+            postgresql.ENUM("pending", "in_progress", "completed", "disputed", name="milestone_status", create_type=False),
             nullable=False,
         ),
         sa.Column("sort_order", sa.Integer(), nullable=False),
@@ -449,11 +449,12 @@ def upgrade() -> None:
         sa.Column("user_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column(
             "type",
-            sa.Enum(
+            postgresql.ENUM(
                 "collaboration_invite", "collaboration_accepted", "collaboration_completed",
                 "new_follower", "new_comment", "new_like", "mention", "message",
                 "badge_earned", "endorsement_received", "milestone_completed", "system",
                 name="notification_type",
+                create_type=False,
             ),
             nullable=False,
         ),
@@ -462,7 +463,7 @@ def upgrade() -> None:
         sa.Column("data", postgresql.JSONB(), nullable=True),
         sa.Column(
             "channel",
-            sa.Enum("in_app", "push", "email", name="notification_channel"),
+            postgresql.ENUM("in_app", "push", "email", name="notification_channel", create_type=False),
             nullable=False,
         ),
         sa.Column("is_read", sa.Boolean(), nullable=False),

@@ -348,8 +348,8 @@ class ProfileSummaryType:
     is_following: bool = False
 
 
-@strawberry.type
-class ContentItemType:
+@strawberry.type(name="ContentItemType")
+class LegacyPostType:
     id: UUIDScalar
     thumbnail: str = ""
     media_url: Optional[str] = None
@@ -374,7 +374,7 @@ class ContentItemType:
 
 
 @strawberry.type
-class FeedItemType(ContentItemType):
+class FeedItemType(LegacyPostType):
     creator: ProfileSummaryType = None  # type: ignore[assignment]
 
 
@@ -398,7 +398,7 @@ class ProfileDetailType:
     open_to_collab: bool = True
     private_account: bool = False
     response_time: str = "< 4 hours"
-    posts: List[ContentItemType] = strawberry.field(default_factory=list)
+    posts: List[LegacyPostType] = strawberry.field(default_factory=list)
     playlists: List["PlaylistType"] = strawberry.field(default_factory=list)
     is_following: bool = False
 
@@ -462,7 +462,7 @@ class HashtagPageType:
 
 @strawberry.type
 class PostPageType:
-    items: List[ContentItemType]
+    items: List[LegacyPostType]
     next_cursor: Optional[str] = None
 
 
@@ -1337,7 +1337,7 @@ class Query:
         return await _user_posts(info.context, user_id, first, after)
 
     @strawberry.field
-    async def my_posts(self, info: StrawberryInfo[AppContext, None]) -> List[ContentItemType]:
+    async def my_posts(self, info: StrawberryInfo[AppContext, None]) -> List[LegacyPostType]:
         """The authenticated user's own posts (all statuses)."""
         return await _my_posts(info.context)
 
@@ -1603,7 +1603,7 @@ class Mutation:
     @strawberry.mutation
     async def create_post(
         self, info: StrawberryInfo[AppContext, None], input: PostInput
-    ) -> ContentItemType:
+    ) -> LegacyPostType:
         """Create a new post."""
         return await _create_post_legacy(info.context, input)
 
@@ -1635,7 +1635,7 @@ class Mutation:
     @strawberry.mutation
     async def update_post(
         self, info: StrawberryInfo[AppContext, None], id: UUIDScalar, input: UpdatePostInput
-    ) -> ContentItemType:
+    ) -> LegacyPostType:
         """Update an existing post."""
         return await _update_post_legacy(info.context, id, input)
 
@@ -3887,9 +3887,9 @@ async def _profile_to_summary(ctx, profile, user=None) -> ProfileSummaryType:
     )
 
 
-async def _post_to_content_item(
+async def _post_to_legacy_post(
     ctx, post, liked_ids=None, saved_ids=None, shared_ids=None,
-) -> ContentItemType:
+) -> LegacyPostType:
     from repositories.social_repository import PostInteractionRepository
 
     viewer_id = ctx.current_user.id if ctx.current_user else None
@@ -3917,7 +3917,7 @@ async def _post_to_content_item(
         except Exception:
             is_shared = False
 
-    return ContentItemType(
+    return LegacyPostType(
         id=post.id,
         thumbnail=post.thumbnail or "",
         media_url=post.media_url,
@@ -3945,7 +3945,7 @@ async def _post_to_content_item(
 async def _post_to_feed_item(ctx, post) -> FeedItemType:
     from repositories.profile_repository import ProfileRepository
 
-    item = await _post_to_content_item(ctx, post)
+    item = await _post_to_legacy_post(ctx, post)
     profile = await ProfileRepository(ctx.db).get_by_user_id(post.user_id)
     creator = await _profile_to_summary(ctx, profile) if profile else ProfileSummaryType(
         id=post.user_id, username="", display_name=""
@@ -3970,7 +3970,7 @@ async def _profile_to_detail(ctx, profile) -> ProfileDetailType:
     posts = await PostRepository(ctx.db).get_by_user_id(profile.user_id, limit=12)
     if not viewer_is_owner:
         posts = [p for p in posts if p.status == ContentStatus.PUBLISHED]
-    post_items = [await _post_to_content_item(ctx, p) for p in posts]
+    post_items = [await _post_to_legacy_post(ctx, p) for p in posts]
 
     playlists = await PlaylistRepository(ctx.db).get_by_profile_id(profile.id)
     playlist_items = [
@@ -4087,7 +4087,7 @@ async def _search_posts(ctx, query, after, limit, hashtag, sort_by) -> FeedPageT
     items = []
     for post, profile, _score in rows:
         creator = await _profile_to_summary(ctx, profile) if profile else None
-        item = await _post_to_content_item(ctx, post)
+        item = await _post_to_legacy_post(ctx, post)
         if creator is None:
             creator = ProfileSummaryType(
                 id=post.user_id,
@@ -4222,12 +4222,12 @@ async def _followers_page_for(ctx, username, after, limit) -> ProfilePageType:
     return ProfilePageType(profiles=summaries, next_cursor=next_cursor)
 
 
-async def _my_posts(ctx) -> List[ContentItemType]:
+async def _my_posts(ctx) -> List[LegacyPostType]:
     from repositories.content_repository import PostRepository
 
     user = ctx.require_auth()
     posts = await PostRepository(ctx.db).get_by_user_id(user.id, limit=200)
-    return [await _post_to_content_item(ctx, p) for p in posts]
+    return [await _post_to_legacy_post(ctx, p) for p in posts]
 
 
 async def _comments(ctx, post_id, limit) -> List[CommentGQLType]:
@@ -4339,7 +4339,7 @@ async def _unfollow(ctx, username) -> FollowResultType:
     )
 
 
-async def _create_post_legacy(ctx, input) -> ContentItemType:
+async def _create_post_legacy(ctx, input) -> LegacyPostType:
     from repositories.content_repository import PostRepository
     from app.models.content import Post, ContentType as CT, ContentStatus as CS
 
@@ -4363,10 +4363,10 @@ async def _create_post_legacy(ctx, input) -> ContentItemType:
     )
     await post_repo.create(post)
     await ctx.db.commit()
-    return await _post_to_content_item(ctx, post)
+    return await _post_to_legacy_post(ctx, post)
 
 
-async def _update_post_legacy(ctx, id, input) -> ContentItemType:
+async def _update_post_legacy(ctx, id, input) -> LegacyPostType:
     from repositories.content_repository import PostRepository
     from app.models.content import ContentStatus as CS
 
@@ -4392,7 +4392,7 @@ async def _update_post_legacy(ctx, id, input) -> ContentItemType:
     post.updated_at = datetime.now(timezone.utc)
     await post_repo.update(post)
     await ctx.db.commit()
-    return await _post_to_content_item(ctx, post)
+    return await _post_to_legacy_post(ctx, post)
 
 
 async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
@@ -4409,8 +4409,8 @@ async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
 
     is_liked = await interactions.has_liked(id, user.id)
     if like and not is_liked:
-        await interactions.toggle_like(id, user.id)
-        if post.user_id != user.id:
+        created_like = await interactions.toggle_like(id, user.id)
+        if created_like and post.user_id != user.id:
             from repositories.notification_repository import NotificationRepository
             from app.models.notification import NotificationType as NType
 

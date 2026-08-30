@@ -11,6 +11,7 @@ from typing import Optional
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.dialects.postgresql import insert
 
 from app.models.social import (
     CommentLike,
@@ -139,9 +140,13 @@ class PostInteractionRepository:
             )
             await self.db.flush()
             return False
-        self.db.add(PostLike(post_id=post_id, user_id=user_id))
+        result = await self.db.execute(
+            insert(PostLike)
+            .values(post_id=post_id, user_id=user_id)
+            .on_conflict_do_nothing(constraint="uq_post_like")
+        )
         await self.db.flush()
-        return True
+        return result.rowcount > 0
 
     async def toggle_save(self, post_id: uuid.UUID, user_id: uuid.UUID) -> bool:
         if await self.has_saved(post_id, user_id):
@@ -150,9 +155,13 @@ class PostInteractionRepository:
             )
             await self.db.flush()
             return False
-        self.db.add(PostSave(post_id=post_id, user_id=user_id))
+        result = await self.db.execute(
+            insert(PostSave)
+            .values(post_id=post_id, user_id=user_id)
+            .on_conflict_do_nothing(constraint="uq_post_save")
+        )
         await self.db.flush()
-        return True
+        return result.rowcount > 0
 
     async def add_share(self, post_id: uuid.UUID, user_id: uuid.UUID) -> bool:
         """Idempotent — repeated shares by the same user don't duplicate rows."""
