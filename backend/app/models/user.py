@@ -58,12 +58,20 @@ class User(Base, TimestampMixin, SoftDeleteMixin):
 
     # Role & Status
     role: Mapped[UserRole] = mapped_column(
-        Enum(UserRole, name="user_role"),
+        Enum(
+            UserRole,
+            name="user_role",
+            values_callable=lambda enum_class: [member.value for member in enum_class],
+        ),
         nullable=False,
         default=UserRole.USER,
     )
     status: Mapped[AccountStatus] = mapped_column(
-        Enum(AccountStatus, name="account_status"),
+        Enum(
+            AccountStatus,
+            name="account_status",
+            values_callable=lambda enum_class: [member.value for member in enum_class],
+        ),
         nullable=False,
         default=AccountStatus.PENDING_VERIFICATION,
     )

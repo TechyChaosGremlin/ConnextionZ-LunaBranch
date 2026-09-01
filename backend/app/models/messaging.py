@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import uuid
 
-from sqlalchemy import Boolean, ForeignKey, String, Text
+from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -58,6 +58,9 @@ class ConversationParticipant(Base, TimestampMixin):
     """Join table linking users to conversations."""
 
     __tablename__ = "conversation_participants"
+    __table_args__ = (
+        UniqueConstraint("conversation_id", "user_id", name="uq_conversation_participant"),
+    )
 
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -93,6 +96,12 @@ class Message(Base, TimestampMixin, SoftDeleteMixin):
     """A single message within a conversation."""
 
     __tablename__ = "messages"
+    __table_args__ = (
+        UniqueConstraint(
+            "conversation_id", "sender_id", "client_message_id",
+            name="uq_message_idempotency_key",
+        ),
+    )
 
     conversation_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -115,6 +124,7 @@ class Message(Base, TimestampMixin, SoftDeleteMixin):
 
     # Attachments
     attachments: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    client_message_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     # Status
     is_edited: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)

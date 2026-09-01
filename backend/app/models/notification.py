@@ -57,7 +57,11 @@ class Notification(Base, TimestampMixin):
 
     # Notification content
     type: Mapped[NotificationType] = mapped_column(
-        Enum(NotificationType, name="notification_type"),
+        Enum(
+            NotificationType,
+            name="notification_type",
+            values_callable=lambda enum_class: [member.value for member in enum_class],
+        ),
         nullable=False,
     )
     title: Mapped[str] = mapped_column(String(256), nullable=False)
@@ -69,7 +73,11 @@ class Notification(Base, TimestampMixin):
 
     # Delivery
     channel: Mapped[NotificationChannel] = mapped_column(
-        Enum(NotificationChannel, name="notification_channel"),
+        Enum(
+            NotificationChannel,
+            name="notification_channel",
+            values_callable=lambda enum_class: [member.value for member in enum_class],
+        ),
         nullable=False,
         default=NotificationChannel.IN_APP,
     )

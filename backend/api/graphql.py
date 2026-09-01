@@ -16,10 +16,12 @@ import uuid
 import re
 from datetime import datetime
 from enum import Enum
+from functools import wraps
 from typing import AsyncIterator, Optional, List, Callable
 
 import strawberry
 from fastapi import Request, Response
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession
 from strawberry.fastapi import BaseContext, GraphQLRouter
 from strawberry.schema.config import StrawberryConfig
@@ -1038,6 +1040,7 @@ class SendMessageInput:
     body: str
     content_type: Optional[str] = None
     attachments: Optional[JSONScalar] = None
+    client_message_id: Optional[str] = None
 
 
 @strawberry.input
@@ -1394,6 +1397,13 @@ class Query:
         return await _conversations(info.context, first, after)
 
     @strawberry.field
+    async def conversation(
+        self, info: StrawberryInfo[AppContext, None], id: UUIDScalar
+    ) -> ConversationType:
+        """Get one conversation when the authenticated user is a participant."""
+        return await _conversation(info.context, id)
+
+    @strawberry.field
     async def messages(
         self,
         info: StrawberryInfo[AppContext, None],
@@ -1403,6 +1413,13 @@ class Query:
     ) -> MessageConnection:
         """Get messages for a conversation."""
         return await _messages(info.context, conversation_id, first, after)
+
+    @strawberry.field
+    async def unread_conversation_count(
+        self, info: StrawberryInfo[AppContext, None]
+    ) -> int:
+        """Count unread messages in the authenticated user's conversations."""
+        return await _unread_conversation_count(info.context)
 
     # -- Notifications (Feature 11) --
     @strawberry.field
@@ -1761,6 +1778,20 @@ class Mutation:
         """Send a message in a conversation."""
         return await _send_message(info.context, input)
 
+    @strawberry.mutation
+    async def mark_conversation_read(
+        self, info: StrawberryInfo[AppContext, None], conversation_id: UUIDScalar
+    ) -> bool:
+        """Mark all messages in a conversation as read for the current user."""
+        return await _mark_conversation_read(info.context, conversation_id)
+
+    @strawberry.mutation
+    async def delete_message(
+        self, info: StrawberryInfo[AppContext, None], id: UUIDScalar
+    ) -> bool:
+        """Soft-delete a message sent by the current user."""
+        return await _delete_message(info.context, id)
+
     # -- Notifications --
     @strawberry.mutation
     async def mark_notification_read(
@@ -1944,7 +1975,9 @@ def _conversation_to_gql(conversation) -> ConversationType:
         id=conversation.id,
         title=conversation.title,
         is_group=conversation.is_group,
+        last_message_text=conversation.last_message_text,
         last_message_at=datetime.fromisoformat(conversation.last_message_at) if conversation.last_message_at else None,
+        last_message_by=conversation.last_message_by,
         created_at=conversation.created_at,
         updated_at=conversation.updated_at,
     )
@@ -1956,10 +1989,11 @@ def _message_to_gql(message) -> MessageType:
         id=message.id,
         conversation_id=message.conversation_id,
         sender_id=message.sender_id,
-        content_type=MessageTypeEnum(message.content_type.value) if message.content_type else MessageTypeEnum.TEXT,
+        content_type=message.content_type or "text",
         body=message.body,
-        media_url=message.media_url,
-        status=MessageStatus(message.status.value) if message.status else MessageStatus.SENT,
+        attachments=message.attachments,
+        is_edited=message.is_edited,
+        edited_at=datetime.fromisoformat(message.edited_at) if message.edited_at else None,
         created_at=message.created_at,
         updated_at=message.updated_at,
     )
@@ -1997,19 +2031,21 @@ async def _my_collaborations(ctx, status, first, after) -> CollaborationConnecti
         from app.models.collaboration import CollaborationStatus as ModelCollaborationStatus
         status_filter = ModelCollaborationStatus(status.value)
     
-    # Parse cursor for pagination
-    before_id = None
+    # Cursor contains the ordered timestamp and UUID tie-breaker.
+    before = None
     if after:
         try:
-            before_id = UUID_type(after)
-        except ValueError:
+            before_time, before_id = after.rsplit("|", 1)
+            datetime.fromisoformat(before_time)
+            before = (before_time, UUID_type(before_id))
+        except (TypeError, ValueError):
             raise ValueError("Invalid cursor")
     
     collabs = await repo.get_for_user(
         user_id=ctx.user.id,
         status=status_filter,
         limit=first + 1,  # Fetch one extra to check hasNextPage
-        before_id=before_id,
+        before=before,
     )
     
     # Check if there are more results
@@ -2021,7 +2057,7 @@ async def _my_collaborations(ctx, status, first, after) -> CollaborationConnecti
     edges = [
         CollaborationEdge(
             node=_collaboration_to_gql(c),
-            cursor=str(c.id),
+            cursor=f"{c.last_message_at}|{c.id}",
         )
         for c in collabs
     ]
@@ -2277,18 +2313,20 @@ async def _user_posts(ctx, user_id, first, after) -> PostConnection:
     
     repo = PostRepository(ctx.db)
     
-    # Parse cursor for pagination
-    before_id = None
+    # Cursor contains the ordered timestamp and UUID tie-breaker.
+    before = None
     if after:
         try:
-            before_id = UUID_type(after)
-        except ValueError:
+            before_time, before_id = after.rsplit("|", 1)
+            datetime.fromisoformat(before_time)
+            before = (before_time, UUID_type(before_id))
+        except (TypeError, ValueError):
             raise ValueError("Invalid cursor")
     
     posts = await repo.get_by_user_id(
         user_id=uid,
         limit=first + 1,  # Fetch one extra to check hasNextPage
-        before_id=before_id,
+        before=before,
     )
     
     # Check if there are more results
@@ -2322,19 +2360,21 @@ async def _collaboration_marketplace(ctx, tags, content_type, first, after) -> C
     
     repo = CollaborationRepository(ctx.db)
     
-    # Parse cursor for pagination
-    before_id = None
+    # Cursor contains the ordered timestamp and UUID tie-breaker.
+    before = None
     if after:
         try:
-            before_id = UUID_type(after)
-        except ValueError:
+            before_time, before_id = after.rsplit("|", 1)
+            datetime.fromisoformat(before_time)
+            before = (before_time, UUID_type(before_id))
+        except (TypeError, ValueError):
             raise ValueError("Invalid cursor")
     
     collabs = await repo.get_marketplace(
         tags=tags,
         content_type=content_type,
         limit=first + 1,  # Fetch one extra to check hasNextPage
-        before_id=before_id,
+        before=before,
     )
     
     # Check if there are more results
@@ -2346,7 +2386,7 @@ async def _collaboration_marketplace(ctx, tags, content_type, first, after) -> C
     edges = [
         CollaborationEdge(
             node=_collaboration_to_gql(c),
-            cursor=str(c.id),
+            cursor=f"{c.last_message_at}|{c.id}",
         )
         for c in collabs
     ]
@@ -2394,8 +2434,9 @@ async def _collaboration(ctx, id) -> Optional[CollaborationType]:
 
 async def _conversations(ctx, first, after) -> ConversationConnection:
     """Resolve conversations query."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
+    user = _require_active_messaging_user(ctx)
+    if first < 1 or first > 100:
+        raise ValueError("first must be between 1 and 100")
     
     from uuid import UUID as UUID_type
     
@@ -2403,19 +2444,22 @@ async def _conversations(ctx, first, after) -> ConversationConnection:
     
     repo = ConversationRepository(ctx.db)
     
-    # Parse cursor for pagination
-    before_id = None
+    # Cursor contains the ordered timestamp and UUID tie-breaker.
+    before = None
     if after:
         try:
-            before_id = UUID_type(after)
-        except ValueError:
+            before_time, before_id = after.rsplit("|", 1)
+            datetime.fromisoformat(before_time)
+            before = (before_time, UUID_type(before_id))
+        except (TypeError, ValueError):
             raise ValueError("Invalid cursor")
     
     conversations = await repo.get_for_user(
-        user_id=ctx.user.id,
+        user_id=user.id,
         limit=first + 1,  # Fetch one extra to check hasNextPage
-        before_id=before_id,
+        before=before,
     )
+    total_count = await repo.count_for_user(user.id)
     
     # Check if there are more results
     has_next_page = len(conversations) > first
@@ -2426,7 +2470,7 @@ async def _conversations(ctx, first, after) -> ConversationConnection:
     edges = [
         ConversationEdge(
             node=_conversation_to_gql(c),
-            cursor=str(c.id),
+            cursor=f"{c.last_message_at}|{c.id}",
         )
         for c in conversations
     ]
@@ -2439,43 +2483,66 @@ async def _conversations(ctx, first, after) -> ConversationConnection:
         end_cursor=edges[-1].cursor if edges else None,
     )
     
-    return ConversationConnection(edges=edges, page_info=page_info)
+    return ConversationConnection(edges=edges, page_info=page_info, total_count=total_count)
+
+
+async def _conversation(ctx, id) -> ConversationType:
+    """Resolve one conversation for an active participant."""
+    user = _require_active_messaging_user(ctx)
+    from uuid import UUID as UUID_type
+    from repositories.messaging_repository import ConversationRepository
+
+    try:
+        conversation_id = id if isinstance(id, UUID_type) else UUID_type(id)
+    except (TypeError, ValueError):
+        raise ValueError("Invalid conversation ID")
+
+    repo = ConversationRepository(ctx.db)
+    if not await repo.get_participant(conversation_id, user.id):
+        raise ValueError("Access denied to this conversation")
+    conversation = await repo.get_by_id(conversation_id)
+    if not conversation or conversation.deleted_at is not None:
+        raise ValueError("Conversation not found")
+    return _conversation_to_gql(conversation)
 
 
 async def _messages(ctx, conversation_id, first, after) -> MessageConnection:
     """Resolve messages query."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
+    user = _require_active_messaging_user(ctx)
+    if first < 1 or first > 100:
+        raise ValueError("first must be between 1 and 100")
     
     from uuid import UUID as UUID_type
     
     from repositories.messaging_repository import ConversationRepository, MessageRepository
     
     try:
-        conv_id = UUID_type(conversation_id)
-    except ValueError:
+        conv_id = conversation_id if isinstance(conversation_id, UUID_type) else UUID_type(conversation_id)
+    except (TypeError, ValueError):
         raise ValueError("Invalid conversation ID")
     
     # Verify user is participant in conversation
     conv_repo = ConversationRepository(ctx.db)
-    participant = await conv_repo.get_participant(conv_id, ctx.user.id)
+    participant = await conv_repo.get_participant(conv_id, user.id)
     if not participant:
         raise ValueError("Access denied to this conversation")
     
-    # Parse cursor for pagination
-    before_id = None
+    # Cursor contains the ordered timestamp and UUID tie-breaker.
+    before = None
     if after:
         try:
-            before_id = UUID_type(after)
-        except ValueError:
+            before_time, before_id = after.rsplit("|", 1)
+            before = (datetime.fromisoformat(before_time), UUID_type(before_id))
+        except (TypeError, ValueError):
             raise ValueError("Invalid cursor")
     
     msg_repo = MessageRepository(ctx.db)
     messages = await msg_repo.get_for_conversation(
         conversation_id=conv_id,
         limit=first + 1,  # Fetch one extra to check hasNextPage
-        before_id=before_id,
+        before=before,
     )
+    total_count = await msg_repo.count_for_conversation(conv_id)
     
     # Check if there are more results
     has_next_page = len(messages) > first
@@ -2486,7 +2553,7 @@ async def _messages(ctx, conversation_id, first, after) -> MessageConnection:
     edges = [
         MessageEdge(
             node=_message_to_gql(m),
-            cursor=str(m.id),
+            cursor=f"{m.created_at.isoformat()}|{m.id}",
         )
         for m in messages
     ]
@@ -2499,7 +2566,7 @@ async def _messages(ctx, conversation_id, first, after) -> MessageConnection:
         end_cursor=edges[-1].cursor if edges else None,
     )
     
-    return MessageConnection(edges=edges, page_info=page_info)
+    return MessageConnection(edges=edges, page_info=page_info, total_count=total_count)
 
 
 async def _notifications(ctx, unread_only, first, after) -> NotificationConnection:
@@ -3596,37 +3663,67 @@ async def _update_milestone(ctx, id, input) -> MilestoneType:
     await ctx.db.commit()
     return _milestone_to_gql(milestone)
 
+def _messaging_write(handler):
+    """Rollback database failures from messaging write resolvers."""
+    @wraps(handler)
+    async def wrapped(ctx, *args, **kwargs):
+        try:
+            return await handler(ctx, *args, **kwargs)
+        except SQLAlchemyError as error:
+            await ctx.db.rollback()
+            raise ValueError("Messaging operation failed") from error
+        except Exception:
+            await ctx.db.rollback()
+            raise
 
+    return wrapped
+
+
+@_messaging_write
 async def _create_conversation(ctx, input) -> ConversationType:
     """Resolve createConversation mutation."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
+    user = _require_active_messaging_user(ctx)
     
-    from uuid import uuid4
     from datetime import datetime, timezone
     from repositories.messaging_repository import ConversationRepository, ConversationParticipant
     from app.models.messaging import Conversation as ConversationModel
     
     # Validate participant IDs
-    if not input.participant_ids:
+    participant_ids = list(dict.fromkeys(input.participant_ids))
+    if not participant_ids:
         raise ValueError("At least one participant required")
-    
-    # Create conversation
-    conversation = ConversationModel(
-        id=uuid4(),
-        title=input.title,
-        is_group=input.is_group if input.is_group is not None else False,
-        created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc),
-    )
-    
+    if input.initial_message is not None:
+        initial_message = input.initial_message.strip()
+        if not initial_message or len(initial_message) > 5000:
+            raise ValueError("Initial message must be between 1 and 5000 characters")
+    if user.id in participant_ids:
+        participant_ids.remove(user.id)
+    if not participant_ids:
+        raise ValueError("A conversation requires another participant")
     conv_repo = ConversationRepository(ctx.db)
+    active_recipient_ids = await conv_repo.get_active_user_ids(participant_ids)
+    if len(active_recipient_ids) != len(participant_ids):
+        raise ValueError("One or more recipients are unavailable")
+    if await conv_repo.users_are_blocked(user.id, participant_ids):
+        raise PermissionError("Cannot message a blocked user")
+
+    is_group = len(participant_ids) > 1
+    if not is_group:
+        existing = await conv_repo.get_direct_conversation(user.id, participant_ids[0])
+        if existing:
+            return _conversation_to_gql(existing)
+
+    now = datetime.now(timezone.utc)
+    conversation = ConversationModel(
+        title=input.title,
+        is_group=is_group,
+        last_message_at=now.isoformat(),
+        created_at=now,
+        updated_at=now,
+    )
     conversation = await conv_repo.create(conversation)
     
-    # Add participants (including current user)
-    all_participant_ids = list(input.participant_ids)
-    if ctx.user.id not in all_participant_ids:
-        all_participant_ids.append(ctx.user.id)
+    all_participant_ids = [user.id, *participant_ids]
     
     for user_id in all_participant_ids:
         participant = ConversationParticipant(
@@ -3634,45 +3731,85 @@ async def _create_conversation(ctx, input) -> ConversationType:
             user_id=user_id,
         )
         await conv_repo.add_participant(participant)
+
+    if input.initial_message:
+        message_input = type("MessageInput", (), {
+            "conversation_id": conversation.id,
+            "body": input.initial_message,
+            "content_type": "text",
+            "attachments": None,
+            "client_message_id": None,
+        })()
+        await _send_message(ctx, message_input, commit=False)
     
     await ctx.db.commit()
     return _conversation_to_gql(conversation)
 
 
-async def _send_message(ctx, input) -> MessageType:
+@_messaging_write
+async def _send_message(ctx, input, commit=True) -> MessageType:
     """Resolve sendMessage mutation."""
-    if not ctx.user:
-        raise ValueError("Authentication required")
+    user = _require_active_messaging_user(ctx)
     
-    from uuid import uuid4
     from datetime import datetime, timezone
     from repositories.messaging_repository import ConversationRepository, MessageRepository
-    from app.models.messaging import Message as MessageModel, MessageStatus, MessageType as ModelMessageType
+    from app.models.messaging import Message as MessageModel
     
     # Verify user is participant in conversation
     conv_repo = ConversationRepository(ctx.db)
-    participant = await conv_repo.get_participant(input.conversation_id, ctx.user.id)
+    participant = await conv_repo.get_participant(input.conversation_id, user.id)
     if not participant:
         raise ValueError("Access denied to this conversation")
+    body = input.body.strip()
+    if not body or len(body) > 5000:
+        raise ValueError("Message body must be between 1 and 5000 characters")
+    content_type = input.content_type or "text"
+    if content_type not in {"text", "image", "file", "collaboration_invite"}:
+        raise ValueError("Unsupported message content type")
+    if input.attachments is not None and not isinstance(input.attachments, (dict, list)):
+        raise ValueError("Attachments must be a JSON object or list")
+    participant_ids = await conv_repo.get_participant_ids(input.conversation_id)
+    if len(await conv_repo.get_active_user_ids(participant_ids)) != len(participant_ids):
+        raise ValueError("One or more conversation participants are unavailable")
+    if await conv_repo.users_are_blocked(user.id, participant_ids):
+        raise PermissionError("Cannot message a blocked user")
+
+    msg_repo = MessageRepository(ctx.db)
+    if input.client_message_id:
+        if len(input.client_message_id) > 128:
+            raise ValueError("clientMessageId must be at most 128 characters")
+        existing = await msg_repo.get_by_client_message_id(
+            input.conversation_id, user.id, input.client_message_id
+        )
+        if existing:
+            return _message_to_gql(existing)
     
     # Create message
     message = MessageModel(
-        id=uuid4(),
         conversation_id=input.conversation_id,
-        sender_id=ctx.user.id,
-        content_type=ModelMessageType.TEXT,  # Default to text
-        body=input.body,
-        media_url=input.media_url,
-        status=MessageStatus.SENT,
+        sender_id=user.id,
+        content_type=content_type,
+        body=body,
+        attachments=input.attachments,
+        client_message_id=input.client_message_id,
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
     
-    msg_repo = MessageRepository(ctx.db)
-    message = await msg_repo.create(message)
+    try:
+        message = await msg_repo.create(message)
+    except IntegrityError:
+        await ctx.db.rollback()
+        if input.client_message_id:
+            existing = await msg_repo.get_by_client_message_id(
+                input.conversation_id, user.id, input.client_message_id
+            )
+            if existing:
+                return _message_to_gql(existing)
+        raise
 
     recipient_ids = await conv_repo.get_notification_recipient_ids(
-        input.conversation_id, ctx.user.id
+        input.conversation_id, user.id
     )
     for recipient_id in recipient_ids:
         await _notify(
@@ -3681,7 +3818,7 @@ async def _send_message(ctx, input) -> MessageType:
             type_name="MESSAGE",
             title="New message",
             body=f"{ctx.user.username} sent you a message",
-            actor_id=ctx.user.id,
+            actor_id=user.id,
             event_key=f"message:{message.id}:{recipient_id}",
             data={"conversation_id": str(input.conversation_id), "message_id": str(message.id)},
         )
@@ -3689,11 +3826,57 @@ async def _send_message(ctx, input) -> MessageType:
     # Update conversation's last_message_at
     conversation = await conv_repo.get_by_id(input.conversation_id)
     if conversation:
-        conversation.last_message_at = datetime.now(timezone.utc)
-        conversation.updated_at = datetime.now(timezone.utc)
+        conversation.last_message_text = body
+        conversation.last_message_at = message.created_at.isoformat()
+        conversation.last_message_by = user.id
     
-    await ctx.db.commit()
+    if commit:
+        await ctx.db.commit()
     return _message_to_gql(message)
+
+
+@_messaging_write
+async def _mark_conversation_read(ctx, conversation_id) -> bool:
+    from repositories.messaging_repository import ConversationRepository, MessageRepository
+
+    user = _require_active_messaging_user(ctx)
+    participant = await ConversationRepository(ctx.db).get_participant(conversation_id, user.id)
+    if not participant:
+        raise ValueError("Access denied to this conversation")
+    await MessageRepository(ctx.db).mark_conversation_read(participant)
+    await ctx.db.commit()
+    return True
+
+
+async def _unread_conversation_count(ctx) -> int:
+    from repositories.messaging_repository import MessageRepository
+
+    user = _require_active_messaging_user(ctx)
+    return await MessageRepository(ctx.db).get_unread_count(user.id)
+
+
+@_messaging_write
+async def _delete_message(ctx, id) -> bool:
+    from repositories.messaging_repository import MessageRepository
+
+    user = _require_active_messaging_user(ctx)
+    repo = MessageRepository(ctx.db)
+    message = await repo.get_by_id(id)
+    if not message or message.deleted_at is not None:
+        raise ValueError("Message not found")
+    if message.sender_id != user.id:
+        raise PermissionError("Only the sender can delete this message")
+    await repo.soft_delete(message)
+    await ctx.db.commit()
+    return True
+
+
+def _require_active_messaging_user(ctx):
+    """Return the current user when their account can use messaging."""
+    user = ctx.require_auth()
+    if user.deleted_at is not None or user.status.value != "active":
+        raise PermissionError("Account is not active")
+    return user
 
 
 async def _mark_notification_read(ctx, id) -> bool:

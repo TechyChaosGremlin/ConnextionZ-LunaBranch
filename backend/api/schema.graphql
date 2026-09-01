@@ -788,6 +788,7 @@ input SendMessageInput {
   body: String!
   contentType: String
   attachments: JSON
+  clientMessageId: String
 }
 
 input CreateBrandOpportunityInput {
@@ -927,6 +928,11 @@ type Query {
     after: String
   ): MessageConnection!
 
+  """
+  A conversation the authenticated user participates in.
+  """
+  conversation(id: UUID!): Conversation!
+
   # ---- Notifications (Feature 11) ----
   """
   Notifications for the authenticated user.
@@ -941,6 +947,11 @@ type Query {
   Count of unread notifications.
   """
   unreadNotificationCount: Int!
+
+  """
+  Count unread messages across the authenticated user's conversations.
+  """
+  unreadConversationCount: Int!
 
   # ---- Reputation (Feature 3) ----
   """
@@ -1077,6 +1088,11 @@ type Mutation {
   deletePost(id: UUID!): Boolean!
 
   """
+  Soft-delete a message sent by the authenticated user.
+  """
+  deleteMessage(id: UUID!): Boolean!
+
+  """
   Like or unlike a post. Returns the new like count.
   """
   likePost(postId: UUID!): Int!
@@ -1132,6 +1148,11 @@ type Mutation {
   Send a message in a conversation.
   """
   sendMessage(input: SendMessageInput!): Message!
+
+  """
+  Mark all messages in a conversation as read for the authenticated user.
+  """
+  markConversationRead(conversationId: UUID!): Boolean!
 
   # ---- Notifications ----
   """

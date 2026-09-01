@@ -32,7 +32,9 @@ SIGNAL_TYPES = (
 
 
 def upgrade() -> None:
-    signal_type_enum = postgresql.ENUM(*SIGNAL_TYPES, name="signal_type")
+    signal_type_enum = postgresql.ENUM(
+        *SIGNAL_TYPES, name="signal_type", create_type=False
+    )
     signal_type_enum.create(op.get_bind(), checkfirst=True)
 
     op.create_table(
