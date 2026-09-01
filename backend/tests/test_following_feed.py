@@ -18,6 +18,7 @@ returns.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -58,15 +59,25 @@ def make_profile(user: User) -> SimpleNamespace:
     )
 
 
-def make_post(user_id: uuid.UUID, post_id: uuid.UUID) -> SimpleNamespace:
+def make_post(
+    user_id: uuid.UUID,
+    post_id: uuid.UUID,
+    *,
+    created_at=None,
+    view_count: int = 0,
+    like_count: int = 0,
+    comment_count: int = 0,
+    share_count: int = 0,
+    save_count: int = 0,
+) -> SimpleNamespace:
     return SimpleNamespace(
         id=post_id,
         user_id=user_id,
         thumbnail="",
         media_url=None,
         caption="hello",
-        view_count=0,
-        like_count=0,
+        view_count=view_count,
+        like_count=like_count,
         collab_with=None,
         hashtags=[],
         audio="Original Sound",
@@ -74,9 +85,10 @@ def make_post(user_id: uuid.UUID, post_id: uuid.UUID) -> SimpleNamespace:
         allow_comments=True,
         allow_collabs=True,
         duration_sec=0.0,
-        comment_count=0,
-        share_count=0,
-        save_count=0,
+        comment_count=comment_count,
+        share_count=share_count,
+        save_count=save_count,
+        created_at=created_at,
         status=ContentStatus.PUBLISHED,
         scheduled_at=None,
     )
@@ -174,6 +186,14 @@ def stub_shared_dependencies(monkeypatch):
         "repositories.profile_repository.ProfileRepository.get_by_user_id", fake_get_profile_by_user_id
     )
 
+    async def fake_get_multiple_profiles(self, user_ids):
+        return [make_profile(SimpleNamespace(id=uid, username="creator")) for uid in user_ids]
+
+    monkeypatch.setattr(
+        "repositories.profile_repository.ProfileRepository.get_multiple_by_user_ids",
+        fake_get_multiple_profiles,
+    )
+
     async def fake_user_get_by_id(self, entity_id):
         return make_user("creator")
 
@@ -191,6 +211,20 @@ def stub_shared_dependencies(monkeypatch):
         return None
 
     monkeypatch.setattr("repositories.analytics_repository.AnalyticsRepository.record", fake_record_signal)
+
+    async def fake_creator_affinity(self, user_id, limit=20):
+        return []
+
+    monkeypatch.setattr(
+        "repositories.analytics_repository.AnalyticsRepository.creator_affinity", fake_creator_affinity
+    )
+
+    async def fake_get_discovery_pool(self, exclude_user_ids=None, since=None, limit=150):
+        return []
+
+    monkeypatch.setattr(
+        "repositories.content_repository.PostRepository.get_discovery_pool", fake_get_discovery_pool
+    )
 
 
 def stub_feed_posts(monkeypatch, posts: list[SimpleNamespace]):
@@ -213,6 +247,28 @@ def stub_hidden_creators(monkeypatch, creator_ids: set[uuid.UUID] | None = None)
     monkeypatch.setattr(
         "repositories.social_repository.FeedSafetyRepository.get_hidden_creator_ids",
         fake_get_hidden_creator_ids,
+    )
+
+
+def stub_discovery_pool(monkeypatch, posts: list[SimpleNamespace]):
+    """Patch PostRepository.get_discovery_pool to emulate the recent-public-posts pool."""
+
+    async def fake_get_discovery_pool(self, exclude_user_ids=None, since=None, limit=150):
+        excluded = set(exclude_user_ids or [])
+        candidates = [p for p in posts if p.user_id not in excluded]
+        return candidates[:limit]
+
+    monkeypatch.setattr(
+        "repositories.content_repository.PostRepository.get_discovery_pool", fake_get_discovery_pool
+    )
+
+
+def stub_creator_affinity(monkeypatch, affinity: dict[uuid.UUID, float]):
+    async def fake_creator_affinity(self, user_id, limit=20):
+        return list(affinity.items())
+
+    monkeypatch.setattr(
+        "repositories.analytics_repository.AnalyticsRepository.creator_affinity", fake_creator_affinity
     )
 
 
@@ -395,6 +451,13 @@ async def test_feed_enforces_private_and_post_visibility_rules(monkeypatch, foll
         )
 
     monkeypatch.setattr("repositories.profile_repository.ProfileRepository.get_by_user_id", fake_profile)
+
+    async def fake_profiles(self, user_ids):
+        return [await fake_profile(self, uid) for uid in user_ids]
+
+    monkeypatch.setattr(
+        "repositories.profile_repository.ProfileRepository.get_multiple_by_user_ids", fake_profiles
+    )
     await follow_graph.follow(viewer.id, public_creator.id)
     await follow_graph.follow(viewer.id, follower_only_creator.id)
 
@@ -419,3 +482,201 @@ async def test_feed_preserves_comment_and_collaboration_settings(monkeypatch, fo
 
     assert page.items[0].allow_comments is False
     assert page.items[0].allow_collabs is False
+
+
+# ── For You: candidate generation, scoring, diversity, cold-start ──────────
+
+
+@pytest.mark.asyncio
+async def test_for_you_candidate_generation_includes_discovery_pool_beyond_follows(
+    monkeypatch, follow_graph
+):
+    """A stranger's public post can surface in For You via the discovery
+    pool even though the viewer doesn't follow them (unlike the Following
+    feed, which never includes non-followed creators)."""
+    viewer = make_user("viewer")
+    stranger = make_user("stranger")
+    stub_feed_posts(monkeypatch, [])  # nothing from viewer's own/followed pool
+    stranger_post_id = _ordered_post_ids(1)[0]
+    stub_discovery_pool(monkeypatch, [make_post(stranger.id, stranger_post_id)])
+    stub_hidden_creators(monkeypatch)
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    assert [item.id for item in page.items] == [stranger_post_id]
+
+
+@pytest.mark.asyncio
+async def test_for_you_cold_start_uses_discovery_pool_with_no_follows_or_history(
+    monkeypatch, follow_graph
+):
+    """A brand-new user with zero follows and zero interaction history still
+    gets a populated For You feed from the discovery pool."""
+    viewer = make_user("viewer")
+    creator = make_user("creator")
+    stub_feed_posts(monkeypatch, [])
+    post_ids = _ordered_post_ids(3)
+    stub_discovery_pool(monkeypatch, [make_post(creator.id, pid) for pid in post_ids])
+    stub_hidden_creators(monkeypatch)
+    stub_creator_affinity(monkeypatch, {})
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    assert {item.id for item in page.items} == set(post_ids)
+
+
+@pytest.mark.asyncio
+async def test_for_you_scoring_ranks_higher_engagement_above_stale_low_engagement(
+    monkeypatch, follow_graph
+):
+    """Deterministic scoring should rank a highly-engaged post above a
+    low-engagement one from a different creator, holding freshness equal."""
+    viewer = make_user("viewer")
+    popular_creator = make_user("popular")
+    quiet_creator = make_user("quiet")
+    now = datetime.now(timezone.utc)
+    popular_id, quiet_id = _ordered_post_ids(2)
+    popular_post = make_post(
+        popular_creator.id, popular_id, created_at=now, view_count=1000,
+        like_count=500, comment_count=100, share_count=50, save_count=50,
+    )
+    quiet_post = make_post(quiet_creator.id, quiet_id, created_at=now, view_count=10)
+    stub_feed_posts(monkeypatch, [])
+    stub_discovery_pool(monkeypatch, [quiet_post, popular_post])
+    stub_hidden_creators(monkeypatch)
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    assert [item.id for item in page.items][0] == popular_id
+
+
+@pytest.mark.asyncio
+async def test_for_you_scoring_rewards_fresh_content_over_stale_content(monkeypatch, follow_graph):
+    """Holding engagement equal, a fresher post should outrank a stale one."""
+    viewer = make_user("viewer")
+    creator_a = make_user("creator_a")
+    creator_b = make_user("creator_b")
+    now = datetime.now(timezone.utc)
+    fresh_id, stale_id = _ordered_post_ids(2)
+    fresh_post = make_post(creator_a.id, fresh_id, created_at=now)
+    stale_post = make_post(creator_b.id, stale_id, created_at=now - timedelta(days=60))
+    stub_feed_posts(monkeypatch, [])
+    stub_discovery_pool(monkeypatch, [stale_post, fresh_post])
+    stub_hidden_creators(monkeypatch)
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    assert [item.id for item in page.items][0] == fresh_id
+
+
+@pytest.mark.asyncio
+async def test_for_you_creator_affinity_boosts_ranking(monkeypatch, follow_graph):
+    """A creator the viewer has strong watch/like history with (per
+    AnalyticsRepository.creator_affinity) should outrank an otherwise
+    identical, unaffiliated creator's post."""
+    viewer = make_user("viewer")
+    affine_creator = make_user("affine")
+    neutral_creator = make_user("neutral")
+    now = datetime.now(timezone.utc)
+    affine_id, neutral_id = _ordered_post_ids(2)
+    affine_post = make_post(affine_creator.id, affine_id, created_at=now)
+    neutral_post = make_post(neutral_creator.id, neutral_id, created_at=now)
+    stub_feed_posts(monkeypatch, [])
+    stub_discovery_pool(monkeypatch, [neutral_post, affine_post])
+    stub_hidden_creators(monkeypatch)
+    stub_creator_affinity(monkeypatch, {affine_creator.id: 25.0})
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    assert [item.id for item in page.items][0] == affine_id
+
+
+@pytest.mark.asyncio
+async def test_for_you_diversity_caps_consecutive_posts_per_creator(monkeypatch, follow_graph):
+    """Even if one creator has the top-scoring posts, no more than
+    MAX_CONSECUTIVE_PER_CREATOR of their posts should appear back-to-back."""
+    from repositories.feed_ranking import MAX_CONSECUTIVE_PER_CREATOR
+
+    viewer = make_user("viewer")
+    dominant_creator = make_user("dominant")
+    other_creator = make_user("other")
+    now = datetime.now(timezone.utc)
+
+    dominant_posts = [
+        make_post(dominant_creator.id, pid, created_at=now, view_count=1000, like_count=500)
+        for pid in _ordered_post_ids(4)
+    ]
+    other_post = make_post(other_creator.id, _ordered_post_ids(1)[0], created_at=now, view_count=1)
+    stub_feed_posts(monkeypatch, [])
+    stub_discovery_pool(monkeypatch, dominant_posts + [other_post])
+    stub_hidden_creators(monkeypatch)
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    creators_in_order = [
+        dominant_creator.id if item.id != other_post.id else other_creator.id
+        for item in page.items
+    ]
+    max_streak = 1
+    streak = 1
+    for prev, curr in zip(creators_in_order, creators_in_order[1:]):
+        streak = streak + 1 if curr == prev else 1
+        max_streak = max(max_streak, streak)
+    assert max_streak <= MAX_CONSECUTIVE_PER_CREATOR
+
+
+@pytest.mark.asyncio
+async def test_for_you_excludes_blocked_and_muted_creators_from_discovery_pool(
+    monkeypatch, follow_graph
+):
+    viewer = make_user("viewer")
+    blocked_creator = make_user("blocked")
+    muted_creator = make_user("muted")
+    visible_creator = make_user("visible")
+    post_ids = _ordered_post_ids(3)
+    posts = [
+        make_post(blocked_creator.id, post_ids[0]),
+        make_post(muted_creator.id, post_ids[1]),
+        make_post(visible_creator.id, post_ids[2]),
+    ]
+    stub_feed_posts(monkeypatch, [])
+    stub_discovery_pool(monkeypatch, posts)
+    stub_hidden_creators(monkeypatch, {blocked_creator.id, muted_creator.id})
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    assert [item.id for item in page.items] == [post_ids[2]]
+
+
+@pytest.mark.asyncio
+async def test_for_you_pagination_is_stable_across_pages(monkeypatch, follow_graph):
+    """Paginating with the cursor from page 1 should resume where page 1
+    left off in ranked order, with no duplicates or gaps, given unchanged
+    underlying data."""
+    viewer = make_user("viewer")
+    creator = make_user("creator")
+    now = datetime.now(timezone.utc)
+    post_ids = _ordered_post_ids(5)
+    # Distinct view counts so ranking order is unambiguous/deterministic.
+    posts = [
+        make_post(creator.id, pid, created_at=now, view_count=(5 - i) * 100)
+        for i, pid in enumerate(post_ids)
+    ]
+    stub_feed_posts(monkeypatch, [])
+    stub_discovery_pool(monkeypatch, posts)
+    stub_hidden_creators(monkeypatch)
+
+    first_page = await _feed(make_ctx(viewer), cursor=None, limit=2, following=False)
+    assert len(first_page.items) == 2
+    assert first_page.next_cursor is not None
+
+    second_page = await _feed(
+        make_ctx(viewer), cursor=first_page.next_cursor, limit=2, following=False
+    )
+    assert len(second_page.items) == 2
+
+    first_ids = [item.id for item in first_page.items]
+    second_ids = [item.id for item in second_page.items]
+    assert set(first_ids).isdisjoint(second_ids)
+    # Ranked strictly by view_count desc here, so ids should appear in that order.
+    assert first_ids + second_ids == post_ids[:4]

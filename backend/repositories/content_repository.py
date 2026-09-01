@@ -111,6 +111,31 @@ class PostRepository(BaseRepository[Post]):
         result = await self.db.execute(stmt)
         return list(result.scalars().all())
 
+    async def get_discovery_pool(
+        self,
+        exclude_user_ids: Optional[list[uuid.UUID]] = None,
+        since: Optional[datetime] = None,
+        limit: int = 150,
+    ) -> list[Post]:
+        """Recent posts for "For You" candidate generation beyond the
+        viewer's own follow graph (cold-start + reach beyond follows).
+
+        Only content-status/soft-delete filtering happens here; visibility,
+        moderation, and block/mute safety filtering happen downstream via
+        the same checks used for the rest of the feed.
+        """
+        stmt = select(Post).where(
+            Post.status == ContentStatus.PUBLISHED,
+            Post.deleted_at.is_(None),
+        )
+        if exclude_user_ids:
+            stmt = stmt.where(~Post.user_id.in_(exclude_user_ids))
+        if since is not None:
+            stmt = stmt.where(Post.created_at >= since)
+        stmt = stmt.order_by(Post.created_at.desc()).limit(limit)
+        result = await self.db.execute(stmt)
+        return list(result.scalars().all())
+
     async def soft_delete(self, post_id: uuid.UUID) -> bool:
         """
         Soft-delete a post.

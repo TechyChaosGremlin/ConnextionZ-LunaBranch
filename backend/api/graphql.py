@@ -2208,13 +2208,37 @@ async def _profiles(ctx, user_ids, first, after) -> CreatorCardConnection:
     )
 
 
+def _feed_item_is_visible(
+    post, *, viewer_id, hidden_creator_ids, profiles, following_ids
+) -> bool:
+    """Shared safety/eligibility check used by both the Following and For You
+    feeds: published + moderated content, not blocked/muted, and respects
+    private-account / per-post visibility rules."""
+    from app.models.content import ContentStatus
+
+    if post.status != ContentStatus.PUBLISHED:
+        return False
+    if getattr(post, "moderation_status", "approved") != "approved":
+        return False
+    if post.user_id in hidden_creator_ids:
+        return False
+    if post.user_id == viewer_id:
+        return True
+    profile = profiles.get(post.user_id)
+    if profile and profile.private_account and post.user_id not in following_ids:
+        return False
+    visibility = getattr(post, "visibility", "public")
+    if visibility == "private":
+        return False
+    return visibility != "followers" or post.user_id in following_ids
+
+
 async def _feed(ctx, cursor, limit, following) -> FeedPageType:
     """Personalized feed for the authenticated user (legacy cursor-page shape)."""
     from uuid import UUID as UUID_type
     from repositories.content_repository import PostRepository
     from repositories.profile_repository import ProfileRepository
     from repositories.social_repository import FeedSafetyRepository, FollowRepository
-    from app.models.content import ContentStatus
 
     user = ctx.require_auth()
     post_repo = PostRepository(ctx.db)
@@ -2227,13 +2251,13 @@ async def _feed(ctx, cursor, limit, following) -> FeedPageType:
         except ValueError:
             raise ValueError("Invalid feed cursor")
 
-    if following:
-        author_ids = await follow_repo.get_following_ids(user.id)
-        if not author_ids:
-            return FeedPageType(items=[], next_cursor=None)
-    else:
-        author_ids = await follow_repo.get_following_ids(user.id)
-        author_ids = author_ids + [user.id]
+    if not following:
+        followed_ids = await follow_repo.get_following_ids(user.id)
+        return await _for_you_feed(ctx, user, followed_ids, before_id, limit)
+
+    author_ids = await follow_repo.get_following_ids(user.id)
+    if not author_ids:
+        return FeedPageType(items=[], next_cursor=None)
 
     posts = await post_repo.get_feed(
         user_ids=author_ids, limit=limit + 1, before_id=before_id,
@@ -2248,24 +2272,17 @@ async def _feed(ctx, cursor, limit, following) -> FeedPageType:
         for creator_id in {post.user_id for post in posts}
     }
 
-    def is_visible(post) -> bool:
-        if post.status != ContentStatus.PUBLISHED:
-            return False
-        if getattr(post, "moderation_status", "approved") != "approved":
-            return False
-        if post.user_id in hidden_creator_ids:
-            return False
-        if post.user_id == user.id:
-            return True
-        profile = profiles.get(post.user_id)
-        if profile and profile.private_account and post.user_id not in following_ids:
-            return False
-        visibility = getattr(post, "visibility", "public")
-        if visibility == "private":
-            return False
-        return visibility != "followers" or post.user_id in following_ids
-
-    posts = [post for post in posts if is_visible(post)]
+    posts = [
+        post
+        for post in posts
+        if _feed_item_is_visible(
+            post,
+            viewer_id=user.id,
+            hidden_creator_ids=hidden_creator_ids,
+            profiles=profiles,
+            following_ids=following_ids,
+        )
+    ]
 
     has_more = len(posts) > limit
     if has_more:
@@ -2273,6 +2290,95 @@ async def _feed(ctx, cursor, limit, following) -> FeedPageType:
 
     items = [await _post_to_feed_item(ctx, p) for p in posts]
     next_cursor = str(posts[-1].id) if has_more and posts else None
+    return FeedPageType(items=items, next_cursor=next_cursor)
+
+
+async def _for_you_feed(ctx, user, followed_ids, before_id, limit) -> FeedPageType:
+    """Personalized "For You" feed: candidate generation + deterministic scoring.
+
+    Candidates = the viewer's own + followed creators' posts, unioned with a
+    recent public discovery pool (reach beyond the follow graph, and the
+    cold-start fallback for viewers with few/no follows or little history —
+    their affinity/follow-boost terms are simply zero, so ranking falls back
+    to engagement + freshness). Posts are scored from existing denormalized
+    engagement counters, follow status, and per-creator affinity derived
+    from the unified interaction-signal log (likes/saves/shares/watch-time/
+    completion/rewatch/follows), then lightly diversified by creator so one
+    creator can't dominate a page. See repositories/feed_ranking.py.
+    """
+    from datetime import timedelta, timezone
+    from repositories.content_repository import PostRepository
+    from repositories.profile_repository import ProfileRepository
+    from repositories.social_repository import FeedSafetyRepository
+    from repositories.analytics_repository import AnalyticsRepository
+    from repositories import feed_ranking
+
+    post_repo = PostRepository(ctx.db)
+    own_and_followed_ids = list(followed_ids) + [user.id]
+
+    personal_pool = await post_repo.get_feed(
+        user_ids=own_and_followed_ids, limit=feed_ranking.FOR_YOU_PERSONAL_POOL_SIZE,
+    )
+    discovery_pool = await post_repo.get_discovery_pool(
+        exclude_user_ids=own_and_followed_ids,
+        since=datetime.now(timezone.utc) - timedelta(days=feed_ranking.FOR_YOU_DISCOVERY_LOOKBACK_DAYS),
+        limit=feed_ranking.FOR_YOU_DISCOVERY_POOL_SIZE,
+    )
+    candidates = list(personal_pool) + list(discovery_pool)
+
+    candidate_creator_ids = {post.user_id for post in candidates}
+    hidden_creator_ids = await FeedSafetyRepository(ctx.db).get_hidden_creator_ids(
+        user.id, list(candidate_creator_ids)
+    )
+    profile_repo = ProfileRepository(ctx.db)
+    profiles = {
+        profile.user_id: profile
+        for profile in await profile_repo.get_multiple_by_user_ids(list(candidate_creator_ids))
+    }
+    following_ids = set(followed_ids) | {user.id}
+
+    visible = [
+        post
+        for post in candidates
+        if _feed_item_is_visible(
+            post,
+            viewer_id=user.id,
+            hidden_creator_ids=hidden_creator_ids,
+            profiles=profiles,
+            following_ids=following_ids,
+        )
+    ]
+
+    affinity = dict(await AnalyticsRepository(ctx.db).creator_affinity(user.id))
+    now = datetime.now(timezone.utc)
+    scored = [
+        (
+            post,
+            feed_ranking.score_post(
+                post=post,
+                now=now,
+                is_followed=post.user_id in following_ids,
+                creator_affinity=affinity.get(post.user_id, 0.0),
+            ),
+        )
+        for post in visible
+    ]
+    ranked = feed_ranking.diversify_by_creator(scored)
+
+    start_index = 0
+    if before_id is not None:
+        for i, post in enumerate(ranked):
+            if post.id == before_id:
+                start_index = i + 1
+                break
+
+    page = ranked[start_index : start_index + limit + 1]
+    has_more = len(page) > limit
+    if has_more:
+        page = page[:limit]
+
+    items = [await _post_to_feed_item(ctx, p) for p in page]
+    next_cursor = str(page[-1].id) if has_more and page else None
     return FeedPageType(items=items, next_cursor=next_cursor)
 
 
