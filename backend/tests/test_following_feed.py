@@ -592,6 +592,26 @@ async def test_for_you_creator_affinity_boosts_ranking(monkeypatch, follow_graph
 
 
 @pytest.mark.asyncio
+async def test_for_you_does_not_treat_own_posts_as_followed(monkeypatch, follow_graph):
+    """Including a viewer's posts must not apply the follow-graph boost."""
+    viewer = make_user("viewer")
+    stranger = make_user("stranger")
+    now = datetime.now(timezone.utc)
+    own_id, stranger_id = _ordered_post_ids(2)
+    own_post = make_post(viewer.id, own_id, created_at=now)
+    stranger_post = make_post(stranger.id, stranger_id, created_at=now)
+    stub_feed_posts(monkeypatch, [own_post])
+    stub_discovery_pool(monkeypatch, [stranger_post])
+    stub_hidden_creators(monkeypatch)
+
+    page = await _feed(make_ctx(viewer), cursor=None, limit=10, following=False)
+
+    # Equal posts use the stable UUID tie-breaker. The self-authored post
+    # should not jump the queue through a follow boost that does not exist.
+    assert [item.id for item in page.items][0] == stranger_id
+
+
+@pytest.mark.asyncio
 async def test_for_you_diversity_caps_consecutive_posts_per_creator(monkeypatch, follow_graph):
     """Even if one creator has the top-scoring posts, no more than
     MAX_CONSECUTIVE_PER_CREATOR of their posts should appear back-to-back."""

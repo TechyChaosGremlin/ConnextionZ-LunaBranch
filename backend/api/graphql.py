@@ -2335,7 +2335,8 @@ async def _for_you_feed(ctx, user, followed_ids, before_id, limit) -> FeedPageTy
         profile.user_id: profile
         for profile in await profile_repo.get_multiple_by_user_ids(list(candidate_creator_ids))
     }
-    following_ids = set(followed_ids) | {user.id}
+    followed_creator_ids = set(followed_ids)
+    following_ids = followed_creator_ids | {user.id}
 
     visible = [
         post
@@ -2357,7 +2358,7 @@ async def _for_you_feed(ctx, user, followed_ids, before_id, limit) -> FeedPageTy
             feed_ranking.score_post(
                 post=post,
                 now=now,
-                is_followed=post.user_id in following_ids,
+                is_followed=post.user_id in followed_creator_ids,
                 creator_affinity=affinity.get(post.user_id, 0.0),
             ),
         )
