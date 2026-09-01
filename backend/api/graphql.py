@@ -13,6 +13,7 @@ from the JWT Bearer token.
 from __future__ import annotations
 
 import uuid
+import re
 from datetime import datetime
 from enum import Enum
 from typing import AsyncIterator, Optional, List, Callable
@@ -916,6 +917,7 @@ class PostInput:
     media_id: UUIDScalar
     thumbnail_media_id: UUIDScalar
     caption: Optional[str] = None
+    mentions: List[UUIDScalar] = strawberry.field(default_factory=list)
     collab_with: Optional[str] = None
     hashtags: List[str] = strawberry.field(default_factory=list)
     audio: str = "Original Sound"
@@ -979,6 +981,7 @@ class CreateCommentInput:
     post_id: UUIDScalar
     parent_id: Optional[UUIDScalar] = None
     body: str
+    mentions: List[UUIDScalar] = strawberry.field(default_factory=list)
 
 
 @strawberry.input
@@ -3323,6 +3326,14 @@ async def _create_comment(ctx, input) -> CommentType:
     post = await post_repo.get_by_id(input.post_id)
     if not post:
         raise ValueError("Post not found")
+    if not post.allow_comments:
+        raise PermissionError("Comments are disabled for this post")
+
+    parent = None
+    if input.parent_id:
+        parent = await comment_repo.get_by_id(input.parent_id)
+        if not parent or parent.post_id != post.id:
+            raise ValueError("Parent comment not found")
 
     comment = Comment(
         post_id=input.post_id,
@@ -3334,6 +3345,19 @@ async def _create_comment(ctx, input) -> CommentType:
     
     # Increment comment count on post
     post.comment_count += 1
+
+    recipient_id = parent.user_id if parent else post.user_id
+    await _notify(
+        ctx,
+        user_id=recipient_id,
+        type_name="NEW_COMMENT",
+        title="New reply" if parent else "New comment",
+        body=f"{user.username} replied to your comment" if parent else f"{user.username} commented on your post",
+        actor_id=user.id,
+        event_key=f"comment:{comment.id}",
+        data={"post_id": str(post.id), "comment_id": str(comment.id)},
+    )
+    await _notify_mentions(ctx, input.mentions, user.id, comment.id, "comment")
     
     await ctx.db.commit()
     
@@ -3646,6 +3670,21 @@ async def _send_message(ctx, input) -> MessageType:
     
     msg_repo = MessageRepository(ctx.db)
     message = await msg_repo.create(message)
+
+    recipient_ids = await conv_repo.get_notification_recipient_ids(
+        input.conversation_id, ctx.user.id
+    )
+    for recipient_id in recipient_ids:
+        await _notify(
+            ctx,
+            user_id=recipient_id,
+            type_name="MESSAGE",
+            title="New message",
+            body=f"{ctx.user.username} sent you a message",
+            actor_id=ctx.user.id,
+            event_key=f"message:{message.id}:{recipient_id}",
+            data={"conversation_id": str(input.conversation_id), "message_id": str(message.id)},
+        )
     
     # Update conversation's last_message_at
     conversation = await conv_repo.get_by_id(input.conversation_id)
@@ -3666,8 +3705,8 @@ async def _mark_notification_read(ctx, id) -> bool:
     repo = NotificationRepository(ctx.db)
 
     try:
-        notification_id = UUID_type(id)
-    except ValueError:
+        notification_id = id if isinstance(id, UUID_type) else UUID_type(id)
+    except (TypeError, ValueError):
         raise ValueError("Invalid notification ID")
 
     notification = await repo.get_by_id(notification_id)
@@ -4371,14 +4410,15 @@ async def _follow(ctx, username) -> FollowResultType:
         raise ValueError("You cannot follow yourself")
 
     follow_repo = FollowRepository(ctx.db)
-    await follow_repo.follow(user.id, target.id)
+    is_new_follow = await follow_repo.follow(user.id, target.id)
 
     from repositories.analytics_repository import AnalyticsRepository
     from app.models.analytics import SignalType
 
-    await AnalyticsRepository(ctx.db).record(
-        user_id=user.id, creator_id=target.id, signal_type=SignalType.FOLLOW
-    )
+    if is_new_follow:
+        await AnalyticsRepository(ctx.db).record(
+            user_id=user.id, creator_id=target.id, signal_type=SignalType.FOLLOW
+        )
 
     profile_repo = ProfileRepository(ctx.db)
     target_profile = await profile_repo.get_by_user_id(target.id)
@@ -4388,16 +4428,17 @@ async def _follow(ctx, username) -> FollowResultType:
     if viewer_profile:
         viewer_profile.following_count = await follow_repo.count_following(user.id)
 
-    from repositories.notification_repository import NotificationRepository
-    from app.models.notification import NotificationType as NType
-
-    await NotificationRepository(ctx.db).create_notification(
-        user_id=target.id,
-        type=NType.NEW_FOLLOWER,
-        title="New follower",
-        body=f"{user.username} started following you",
-        actor_id=user.id,
-    )
+    if is_new_follow:
+        await _notify(
+            ctx,
+            user_id=target.id,
+            type_name="NEW_FOLLOWER",
+            title="New follower",
+            body=f"{user.username} started following you",
+            actor_id=user.id,
+            event_key=None,
+            data={"user_id": str(user.id)},
+        )
 
     await ctx.db.commit()
 
@@ -4457,6 +4498,7 @@ async def _create_post_legacy(ctx, input) -> LegacyPostType:
         content_type=CT.VIDEO,
         status=CS(status),
         caption=input.caption,
+        mentions=input.mentions,
         collab_with=input.collab_with,
         hashtags=input.hashtags or [],
         audio=input.audio,
@@ -4467,6 +4509,7 @@ async def _create_post_legacy(ctx, input) -> LegacyPostType:
         scheduled_at=input.scheduled_at,
     )
     await post_repo.create(post)
+    await _notify_mentions(ctx, input.mentions, user.id, post.id, "post")
     await ctx.db.commit()
     return await _post_to_legacy_post(ctx, post)
 
@@ -4531,6 +4574,7 @@ async def _like_post_legacy(ctx, id, like: bool) -> LikeResultType:
                 title="New like",
                 body=f"{user.username} liked your post",
                 actor_id=user.id,
+                data={"post_id": str(id)},
             )
     elif not like and is_liked:
         await interactions.toggle_like(id, user.id)
@@ -4667,6 +4711,17 @@ async def _add_comment(ctx, post_id, text) -> CommentGQLType:
     comment = Comment(post_id=post_id, user_id=user.id, body=text)
     await comment_repo.create(comment)
     post.comment_count += 1
+    await _notify(
+        ctx,
+        user_id=post.user_id,
+        type_name="NEW_COMMENT",
+        title="New comment",
+        body=f"{user.username} commented on your post",
+        actor_id=user.id,
+        event_key=f"comment:{comment.id}",
+        data={"post_id": str(post.id), "comment_id": str(comment.id)},
+    )
+    await _notify_username_mentions(ctx, text, user.id, comment.id, "comment")
     await ctx.db.commit()
 
     profile = await ProfileRepository(ctx.db).get_by_user_id(user.id)
@@ -4677,6 +4732,66 @@ async def _add_comment(ctx, post_id, text) -> CommentGQLType:
         id=comment.id, text=comment.body, likes=0, is_liked=False,
         can_delete=True, can_edit=True, moderation_status="approved",
         created_at=_iso(comment.created_at) or "", author=author,
+    )
+
+
+async def _notify(
+    ctx,
+    *,
+    user_id,
+    type_name: str,
+    title: str,
+    body: str,
+    actor_id,
+    event_key: Optional[str],
+    data: dict,
+) -> None:
+    """Queue one persisted in-app notification within the current transaction."""
+    from app.models.notification import NotificationType
+    from repositories.notification_repository import NotificationRepository
+    from repositories.user_repository import UserRepository
+
+    if not await UserRepository(ctx.db).get_by_id(user_id):
+        return
+    await NotificationRepository(ctx.db).create_notification(
+        user_id=user_id,
+        type=NotificationType[type_name],
+        title=title,
+        body=body,
+        actor_id=actor_id,
+        event_key=event_key,
+        data=data,
+    )
+
+
+async def _notify_mentions(ctx, mentioned_user_ids, actor_id, source_id, source_type: str) -> None:
+    for mentioned_user_id in set(mentioned_user_ids or []):
+        await _notify(
+            ctx,
+            user_id=mentioned_user_id,
+            type_name="MENTION",
+            title="You were mentioned",
+            body=f"{ctx.user.username} mentioned you",
+            actor_id=actor_id,
+            event_key=f"mention:{source_type}:{source_id}:{mentioned_user_id}",
+            data={f"{source_type}_id": str(source_id)},
+        )
+
+
+async def _notify_username_mentions(ctx, text: str, actor_id, source_id, source_type: str) -> None:
+    from repositories.profile_repository import ProfileRepository
+
+    usernames = {username.lower() for username in re.findall(r"(?<!\w)@([A-Za-z0-9_]{1,64})", text)}
+    profiles = [
+        await ProfileRepository(ctx.db).get_by_username(username)
+        for username in usernames
+    ]
+    await _notify_mentions(
+        ctx,
+        [profile.user_id for profile in profiles if profile],
+        actor_id,
+        source_id,
+        source_type,
     )
 
 

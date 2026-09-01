@@ -97,7 +97,10 @@ class FakeFollowGraph:
         self.edges: set[tuple[uuid.UUID, uuid.UUID]] = set()
 
     async def follow(self, follower_id, following_id):
+        if (follower_id, following_id) in self.edges:
+            return False
         self.edges.add((follower_id, following_id))
+        return True
 
     async def unfollow(self, follower_id, following_id):
         self.edges.discard((follower_id, following_id))

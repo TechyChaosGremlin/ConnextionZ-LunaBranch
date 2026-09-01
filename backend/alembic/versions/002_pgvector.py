@@ -1,11 +1,11 @@
 """Enable pgvector extension and create embedding tables.
 
-Revision ID: 002
+Revision ID: 002_pgvector
 Revises: 001
 Create Date: 2026-07-07 00:00:00.000000
 """
 
-revision = "002"
+revision = "002_pgvector"
 down_revision = "001"
 branch_labels = None
 depends_on = None

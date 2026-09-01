@@ -9,7 +9,7 @@ from __future__ import annotations
 import enum
 import uuid
 
-from sqlalchemy import Boolean, Enum, ForeignKey, String, Text
+from sqlalchemy import Boolean, Enum, ForeignKey, String, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -41,6 +41,12 @@ class Notification(Base, TimestampMixin):
     """A notification delivered to a user."""
 
     __tablename__ = "notifications"
+    __table_args__ = (
+        UniqueConstraint(
+            "user_id", "type", "actor_id", "event_key",
+            name="uq_notification_event_delivery",
+        ),
+    )
 
     user_id: Mapped[uuid.UUID] = mapped_column(
         PG_UUID(as_uuid=True),
@@ -59,6 +65,7 @@ class Notification(Base, TimestampMixin):
     data: Mapped[dict | None] = mapped_column(
         JSONB, nullable=True
     )  # payload for deep-linking
+    event_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
 
     # Delivery
     channel: Mapped[NotificationChannel] = mapped_column(

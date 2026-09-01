@@ -42,11 +42,15 @@ class FollowRepository(BaseRepository[Follow]):
         )
         return result.first() is not None
 
-    async def follow(self, follower_id: uuid.UUID, following_id: uuid.UUID) -> None:
-        if await self.is_following(follower_id, following_id):
-            return
-        self.db.add(Follow(follower_id=follower_id, following_id=following_id))
+    async def follow(self, follower_id: uuid.UUID, following_id: uuid.UUID) -> bool:
+        """Create a follow relationship, returning whether this call created it."""
+        result = await self.db.execute(
+            insert(Follow)
+            .values(follower_id=follower_id, following_id=following_id)
+            .on_conflict_do_nothing(constraint="uq_follow_pair")
+        )
         await self.db.flush()
+        return result.rowcount == 1
 
     async def unfollow(self, follower_id: uuid.UUID, following_id: uuid.UUID) -> None:
         await self.db.execute(

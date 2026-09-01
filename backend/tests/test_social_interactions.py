@@ -30,8 +30,11 @@ from api.graphql import (
     _delete_comment_legacy,
     _like_comment_legacy,
     _like_post_legacy,
+    _mark_all_notifications_read,
+    _mark_notification_read,
     _save_post_legacy,
     _share_post_legacy,
+    _unread_notification_count,
 )
 from app.models.user import AccountStatus, User, UserRole
 from repositories.social_repository import PostInteractionRepository
@@ -243,6 +246,58 @@ async def test_like_post_not_found(monkeypatch):
         await _like_post_legacy(ctx, uuid.uuid4(), like=True)
 
 
+# ── Notification state ──────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_unread_notification_count_uses_current_user(monkeypatch):
+    user = make_user()
+    ctx = make_ctx(user)
+    unread_count = AsyncMock(return_value=3)
+    monkeypatch.setattr(
+        "repositories.notification_repository.NotificationRepository.get_unread_count",
+        unread_count,
+    )
+
+    assert await _unread_notification_count(ctx) == 3
+    unread_count.assert_awaited_once_with(user.id)
+
+
+@pytest.mark.asyncio
+async def test_mark_notification_read_enforces_ownership(monkeypatch):
+    user = make_user()
+    notification = SimpleNamespace(id=uuid.uuid4(), user_id=uuid.uuid4())
+    ctx = make_ctx(user)
+    mark_as_read = AsyncMock()
+
+    monkeypatch.setattr(
+        "repositories.notification_repository.NotificationRepository.get_by_id",
+        AsyncMock(return_value=notification),
+    )
+    monkeypatch.setattr(
+        "repositories.notification_repository.NotificationRepository.mark_as_read",
+        mark_as_read,
+    )
+
+    with pytest.raises(PermissionError):
+        await _mark_notification_read(ctx, notification.id)
+    mark_as_read.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_mark_all_notifications_read_scopes_to_current_user(monkeypatch):
+    user = make_user()
+    ctx = make_ctx(user)
+    mark_all_as_read = AsyncMock(return_value=2)
+    monkeypatch.setattr(
+        "repositories.notification_repository.NotificationRepository.mark_all_as_read",
+        mark_all_as_read,
+    )
+
+    assert await _mark_all_notifications_read(ctx) is True
+    mark_all_as_read.assert_awaited_once_with(user.id)
+
+
 # ── Save / Unsave ────────────────────────────────────────────────────────────
 
 
@@ -364,7 +419,10 @@ async def test_share_post_not_found(monkeypatch):
 @pytest.mark.asyncio
 async def test_create_comment(monkeypatch):
     user = make_user()
-    post = SimpleNamespace(id=uuid.uuid4(), allow_comments=True, comment_count=0)
+    post_owner_id = uuid.uuid4()
+    post = SimpleNamespace(
+        id=uuid.uuid4(), user_id=post_owner_id, allow_comments=True, comment_count=0
+    )
     ctx = make_ctx(user)
 
     async def fake_get_by_id(self, post_id):
@@ -383,12 +441,16 @@ async def test_create_comment(monkeypatch):
         "repositories.profile_repository.ProfileRepository.get_by_user_id",
         fake_get_profile_by_user_id,
     )
+    notification = AsyncMock()
+    monkeypatch.setattr("api.graphql._notify", notification)
 
     result = await _add_comment(ctx, post.id, "Nice post!")
 
     assert result.text == "Nice post!"
     assert result.can_delete is True
     assert post.comment_count == 1
+    notification.assert_awaited_once()
+    assert notification.await_args.kwargs["user_id"] == post_owner_id
 
 
 @pytest.mark.asyncio

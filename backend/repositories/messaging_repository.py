@@ -73,6 +73,19 @@ class ConversationRepository(BaseRepository[Conversation]):
         )
         return result.scalar_one_or_none()
 
+    async def get_notification_recipient_ids(
+        self, conversation_id: uuid.UUID, sender_id: uuid.UUID
+    ) -> List[uuid.UUID]:
+        """Return unmuted participants other than the sender."""
+        result = await self.db.execute(
+            select(ConversationParticipant.user_id).where(
+                ConversationParticipant.conversation_id == conversation_id,
+                ConversationParticipant.user_id != sender_id,
+                ConversationParticipant.is_muted.is_(False),
+            )
+        )
+        return list(result.scalars().all())
+
 
 class MessageRepository(BaseRepository[Message]):
     """Repository for Message model database operations.

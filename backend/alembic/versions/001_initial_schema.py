@@ -461,6 +461,7 @@ def upgrade() -> None:
         sa.Column("title", sa.String(256), nullable=False),
         sa.Column("body", sa.Text(), nullable=True),
         sa.Column("data", postgresql.JSONB(), nullable=True),
+        sa.Column("event_key", sa.String(256), nullable=True),
         sa.Column(
             "channel",
             postgresql.ENUM("in_app", "push", "email", name="notification_channel", create_type=False),
@@ -474,6 +475,7 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
         sa.ForeignKeyConstraint(["user_id"], ["users.id"], ondelete="CASCADE"),
         sa.ForeignKeyConstraint(["actor_id"], ["users.id"], ondelete="SET NULL"),
+        sa.UniqueConstraint("user_id", "type", "actor_id", "event_key", name="uq_notification_event_delivery"),
     )
     op.create_index("ix_notifications_user_id", "notifications", ["user_id"])
     op.create_index("ix_notifications_type", "notifications", ["type"])
